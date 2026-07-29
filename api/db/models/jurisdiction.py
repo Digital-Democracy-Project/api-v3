@@ -51,7 +51,7 @@ class LegislativeSession(PrimaryUUID, Base):
     end_date = Column(String, default="")
 
     jurisdiction_id = Column(String, ForeignKey(Jurisdiction.id))
-    jurisdiction = relationship("Jurisdiction")
+    jurisdiction = relationship("Jurisdiction", back_populates="legislative_sessions")
 
     downloads = relationship(
         "DataExport",
@@ -70,7 +70,7 @@ class DataExport(Base):
     data_type = Column(String)
     url = Column(String)
 
-    session = relationship(LegislativeSession)
+    session = relationship(LegislativeSession, back_populates="downloads")
 
 
 class RunPlan(Base):
@@ -82,4 +82,4 @@ class RunPlan(Base):
     end_time = Column(DateTime)
 
     jurisdiction_id = Column(String, ForeignKey(Jurisdiction.id))
-    jurisdiction = relationship("Jurisdiction")
+    jurisdiction = relationship("Jurisdiction", back_populates="run_plans")

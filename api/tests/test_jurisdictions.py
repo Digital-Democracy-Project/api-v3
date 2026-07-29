@@ -157,3 +157,25 @@ def test_jurisdiction_include_latest_runs(client):
     response = client.get("/jurisdictions/ne?include=latest_runs").json()
     assert len(response["latest_runs"]) == 20
     assert query_logger.count == 2
+
+
+def test_jurisdiction_detail_include_sessions(client):
+    # Regression test for OPEN-12: the detail route (jurisdiction_detail /
+    # JurisdictionPagination.detail) selectinloads legislative_sessions *and*
+    # legislative_sessions.downloads via the same include_map_overrides as the
+    # list route -- but unlike the list route, this exact combination had no
+    # coverage here, and it's the one ddp-broker-py's get_jurisdiction_detail()
+    # actually calls in production, where it 500s.
+    response = client.get("/jurisdictions/ne?include=legislative_sessions").json()
+    assert len(response["legislative_sessions"]) == 2
+    assert response["legislative_sessions"][0]["identifier"] == "2020"
+    assert response["legislative_sessions"][0]["downloads"] == [
+        {
+            "created_at": "2021-01-01T00:00:00",
+            "updated_at": "2021-01-01T00:00:00",
+            "data_type": "csv",
+            "url": "https://example.com",
+        }
+    ]
+    assert response["legislative_sessions"][1]["identifier"] == "2021"
+    assert response["legislative_sessions"][1]["downloads"] == []
