@@ -1,0 +1,64 @@
+# Isolated, self-contained stack for CodeBot pre-merge testing.
+#
+# api-v3's own test suite (api/tests/conftest.py) is already fully
+# self-managing: a session-scoped autouse fixture creates/drops the test
+# database and seeds its own fixtures in-process (no Alembic, no seed SQL,
+# no external data). It only needs a reachable, throwaway Postgres and
+# DATABASE_URL/TEST_DATABASE_URL pointed at it — nothing else.
+#
+# No published host ports, so this never collides with a developer's own
+# `docker compose up -d db-test` (see this repo's root docker-compose.yml).
+# Always launch via .codebot/test.sh (unique project name + per-run image tag).
+
+services:
+  test:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ${CODEBOT_TEST_IMAGE:?CODEBOT_TEST_IMAGE must be set — run via .codebot/test.sh}
+    # Code under test comes from THIS checkout (CodeBot's clone), overlaying
+    # whatever was baked into the image at build time.
+    volumes:
+      - ..:/app
+    working_dir: /app
+    # Deliberately NOT `entrypoint: ["poetry", "run"]` here. api-v3's
+    # Dockerfile only installs main deps (`poetry install --no-root --only
+    # main`) — pytest is a dev-only dependency and is never in the built
+    # image. Worse, invoking the global `poetry` CLI at all inside this
+    # image is broken: its own `pip install poetry` bootstrap pulls in a
+    # newer typing_extensions than the project's locked deps expect, and
+    # `poetry install --only main` later downgrades typing_extensions back
+    # down — breaking poetry's OWN runtime (confirmed live: `poetry run
+    # pytest` fails with "cannot import name 'Buffer' from
+    # 'typing_extensions'" before ever reaching pytest). Since
+    # `virtualenvs.create false` already puts every dependency on the global
+    # PYTHONPATH, there's no reason to go through poetry's CLI at all here —
+    # .codebot/test.sh installs pytest directly via pip and runs it plain.
+    entrypoint: []
+    environment:
+      DATABASE_URL: postgresql://v3test:v3test@db:5432/v3test
+      TEST_DATABASE_URL: postgresql://v3test:v3test@db:5432/v3test
+    depends_on:
+      db:
+        condition: service_healthy
+    # No `ports:` — internal only.
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: v3test
+      POSTGRES_USER: v3test
+      POSTGRES_PASSWORD: v3test
+      # This repo's locked psycopg2-binary predates SCRAM support (postgres:16's
+      # default auth method) — confirmed live: `SCRAM authentication requires
+      # libpq version 10 or above` from inside the test container. Force md5,
+      # which that psycopg2 build handles fine, rather than pin to an older
+      # Postgres major version just to dodge a client-library gap.
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    # No named volume — dropped on `down -v`.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U v3test"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
