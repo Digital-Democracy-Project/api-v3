@@ -439,3 +439,74 @@ def test_bills_include_actions(client):
                 assert "id" in entity
                 assert "name" in entity
                 assert "type" in entity
+
+
+def test_bill_detail_versions_raw_text_populated_prefers_pdf(client):
+    """OPEN-13: archived latest version exposes raw_text, preferring PDF over HTML."""
+    response = client.get("/bills/oh/2021/HB 9101?include=versions").json()
+    # base bill query + versions + versions.links + the new archived-doc lookup query
+    assert query_logger.count == 4
+    assert response["identifier"] == "HB 9101"
+    assert len(response["versions"]) == 1
+    links = {link["media_type"]: link for link in response["versions"][0]["links"]}
+    assert (
+        links["application/pdf"]["raw_text"]
+        == "AN ACT relating to scorpions; designating the scorpion as the state arachnid."
+    )
+    assert "raw_text" not in links["text/html"]
+
+
+def test_bill_detail_versions_raw_text_absent_when_not_archived(client):
+    """OPEN-13: a bill with no archived BillVersionDocument row omits raw_text, doesn't error."""
+    response = client.get("/bills/oh/2021/HB 9102?include=versions").json()
+    assert response["identifier"] == "HB 9102"
+    assert len(response["versions"]) == 1
+    for link in response["versions"][0]["links"]:
+        assert "raw_text" not in link
+
+
+def test_bill_detail_versions_raw_text_only_surfaced_for_latest_version(client):
+    """
+    OPEN-13: only the latest version's text is ever surfaced -- an older, archived version's
+    text must not leak through when the bill's latest version itself isn't archived.
+    """
+    response = client.get("/bills/oh/2021/HB 9103?include=versions").json()
+    assert response["identifier"] == "HB 9103"
+    assert len(response["versions"]) == 2
+    for version in response["versions"]:
+        for link in version["links"]:
+            assert "raw_text" not in link
+
+
+def test_bills_list_endpoint_never_exposes_raw_text(client):
+    """OPEN-13: raw_text is a single-bill-detail-only feature -- the /bills list never sets it,
+    even for an archived bill, to keep paginated response size bounded."""
+    response = client.get(
+        "/bills?jurisdiction=oh&session=2021&identifier=HB 9101&include=versions"
+    )
+    # base bill query + count + versions + versions.links -- no archived-doc lookup query
+    assert query_logger.count == 4
+    results = response.json()["results"]
+    assert len(results) == 1
+    for link in results[0]["versions"][0]["links"]:
+        assert "raw_text" not in link
+
+
+def test_bills_documents_never_get_raw_text(client):
+    """OPEN-13: BillDocument (unlike BillVersion) is never archived by the pipeline, so
+    documents[].links[].raw_text must always be absent, even on a single-bill detail query."""
+    ne_bill_id = client.get("/bills?jurisdiction=ne&session=2020").json()["results"][0][
+        "id"
+    ]
+    response = client.get(
+        f"/bills/{ne_bill_id}?include=documents&include=versions"
+    ).json()
+    assert response["id"] == ne_bill_id
+    assert len(response["documents"]) == 3
+    for document in response["documents"]:
+        for link in document["links"]:
+            assert "raw_text" not in link
+    # ne bills have versions but no archived BillVersionDocument rows either
+    for version in response["versions"]:
+        for link in version["links"]:
+            assert "raw_text" not in link

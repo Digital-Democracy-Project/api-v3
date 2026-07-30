@@ -4,7 +4,7 @@ from typing import Optional, List
 from enum import Enum
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import func, desc, nullslast
-from sqlalchemy.orm import contains_eager
+from sqlalchemy.orm import contains_eager, object_session
 from openstates.utils.transformers import fix_bill_id
 from .db import SessionLocal, get_db, models
 from .schemas import Bill
@@ -52,6 +52,51 @@ class BillPagination(Pagination):
         BillInclude.actions: ["actions", "actions.related_entities"],
     }
     max_per_page = 20
+
+    @classmethod
+    def postprocess_includes(cls, obj, data, includes, *, detail=False):
+        """
+        Attach archived raw_text (OPEN-13) to the latest version's preferred link, single-bill
+        detail queries only -- a paginated /bills list never gets full document text, to keep
+        response size bounded. BillVersionDocument isn't FK-linked to BillVersion (see its
+        docstring in db/models/bills.py), so this matches by content instead: bill + version
+        note/date + link url, same natural key openstates-core's archive_bill_versions() writes.
+        """
+        if not detail or BillInclude.versions not in includes or not data.versions:
+            return
+
+        # "latest" matches the order_by("-date", "-note") convention already used for this
+        # purpose in openstates-core/openstates/cli/text_extract.py.
+        latest = max(data.versions, key=lambda v: (v.date, v.note))
+        if not latest.links:
+            return
+
+        db = object_session(data)
+        urls = [link.url for link in latest.links]
+        archived = (
+            db.query(models.BillVersionDocument)
+            .filter(
+                models.BillVersionDocument.bill_id == data.id,
+                models.BillVersionDocument.version_note == latest.note,
+                models.BillVersionDocument.version_date == latest.date,
+                models.BillVersionDocument.source_url.in_(urls),
+                models.BillVersionDocument.is_error.is_(False),
+            )
+            .all()
+        )
+        by_media_type = {row.media_type: row for row in archived if row.raw_text}
+        if not by_media_type:
+            return
+        # Same PDF-over-HTML priority archive_bill_versions() uses for diff lineage.
+        chosen = by_media_type.get("application/pdf") or next(
+            iter(by_media_type.values())
+        )
+
+        version_obj = obj.versions[list(data.versions).index(latest)]
+        for link_index, link_row in enumerate(latest.links):
+            if link_row.url == chosen.source_url:
+                version_obj.links[link_index].raw_text = chosen.raw_text
+                break
 
 
 router = APIRouter()

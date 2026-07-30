@@ -286,6 +286,17 @@ class BillAction(BaseModel):
 class BillDocumentLink(BaseModel):
     url: str = Field(..., example="https://example.com/doc.pdf")
     media_type: str = Field(..., example="application/pdf")
+    raw_text: Optional[str] = Field(
+        None,
+        example="AN ACT relating to...",
+        description=(
+            "Extracted full text of the archived source document, if one has been archived. "
+            "Currently only populated for the latest version of a bill, and only when queried "
+            "through a single-bill detail endpoint (not the /bills list/search endpoint). "
+            "Omitted for jurisdictions/bills with no archived document (all non-Florida "
+            "jurisdictions today, and any Florida bill not yet archived)."
+        ),
+    )
 
     class Config:
         orm_mode = True
