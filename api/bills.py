@@ -54,31 +54,27 @@ class BillPagination(Pagination):
     max_per_page = 20
 
     @classmethod
-    def postprocess_includes(cls, obj, data, includes, *, detail=False):
-        """
-        Attach archived raw_text (OPEN-13) to the latest version's preferred link, single-bill
-        detail queries only -- a paginated /bills list never gets full document text, to keep
-        response size bounded. BillVersionDocument isn't FK-linked to BillVersion (see its
+    def _attach_archived_document(cls, db, data, obj, version):
+        """Attach archived raw_text (OPEN-13) -- and, since PLAN-bill-document-provenance.md
+        Phase 8's bill_changelog work, diff_from_previous_version -- to `version`'s preferred
+        link/version object. BillVersionDocument isn't FK-linked to BillVersion (see its
         docstring in db/models/bills.py), so this matches by content instead: bill + version
         note/date + link url, same natural key openstates-core's archive_bill_versions() writes.
+
+        Returns the chosen BillVersionDocument row (so callers needing its raw_text for
+        something other than the response body, e.g. bill_changelog's old_bill_source, don't
+        have to re-query), or None if nothing archived matches.
         """
-        if not detail or BillInclude.versions not in includes or not data.versions:
-            return
+        if not version.links:
+            return None
 
-        # "latest" matches the order_by("-date", "-note") convention already used for this
-        # purpose in openstates-core/openstates/cli/text_extract.py.
-        latest = max(data.versions, key=lambda v: (v.date, v.note))
-        if not latest.links:
-            return
-
-        db = object_session(data)
-        urls = [link.url for link in latest.links]
+        urls = [link.url for link in version.links]
         archived = (
             db.query(models.BillVersionDocument)
             .filter(
                 models.BillVersionDocument.bill_id == data.id,
-                models.BillVersionDocument.version_note == latest.note,
-                models.BillVersionDocument.version_date == latest.date,
+                models.BillVersionDocument.version_note == version.note,
+                models.BillVersionDocument.version_date == version.date,
                 models.BillVersionDocument.source_url.in_(urls),
                 models.BillVersionDocument.is_error.is_(False),
             )
@@ -86,17 +82,49 @@ class BillPagination(Pagination):
         )
         by_media_type = {row.media_type: row for row in archived if row.raw_text}
         if not by_media_type:
-            return
+            return None
         # Same PDF-over-HTML priority archive_bill_versions() uses for diff lineage.
         chosen = by_media_type.get("application/pdf") or next(
             iter(by_media_type.values())
         )
 
-        version_obj = obj.versions[list(data.versions).index(latest)]
-        for link_index, link_row in enumerate(latest.links):
+        version_obj = obj.versions[list(data.versions).index(version)]
+        version_obj.diff_from_previous_version = chosen.diff_from_previous_version
+        for link_index, link_row in enumerate(version.links):
             if link_row.url == chosen.source_url:
                 version_obj.links[link_index].raw_text = chosen.raw_text
                 break
+        return chosen
+
+    @classmethod
+    def postprocess_includes(cls, obj, data, includes, *, detail=False):
+        """
+        Attach archived raw_text (OPEN-13) to the latest version's preferred link, and to the
+        version immediately before it (PLAN-bill-document-provenance.md Phase 8's
+        bill_changelog work, ddp-infra "excellent news" fix 2026-07-30) -- single-bill detail
+        queries only, a paginated /bills list never gets full document text, to keep response
+        size bounded.
+        """
+        if not detail or BillInclude.versions not in includes or not data.versions:
+            return
+
+        db = object_session(data)
+
+        # "latest"/ordering matches the order_by("-date", "-note") convention already used for
+        # this purpose in openstates-core/openstates/cli/text_extract.py.
+        ordered = sorted(data.versions, key=lambda v: (v.date, v.note))
+        latest = ordered[-1]
+        cls._attach_archived_document(db, data, obj, latest)
+
+        # bill_changelog (ddp-sync) needs the *prior* version's own raw_text as its
+        # old_bill_source, plus latest's diff_from_previous_version (attached above) as its
+        # diff_source -- both already computed and archived by archive_bill_versions(), never
+        # re-derived here. Only two versions ever need archived text through this endpoint
+        # (latest + the one immediately before it) -- a bill's full version history is not a
+        # single-bill-detail-endpoint use case.
+        if len(ordered) >= 2:
+            previous = ordered[-2]
+            cls._attach_archived_document(db, data, obj, previous)
 
 
 router = APIRouter()
