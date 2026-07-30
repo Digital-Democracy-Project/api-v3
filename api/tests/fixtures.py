@@ -11,6 +11,7 @@ from api.db.models import (
     BillSponsorship,
     BillVersion,
     BillVersionLink,
+    BillVersionDocument,
     RelatedBill,
     Event,
     EventAgendaItem,
@@ -551,6 +552,7 @@ def ohio():
         k5_sub,
         com_mem1,
         com_mem2,
+        *create_test_bills_with_archived_versions(ls2021, leg),
     ]
 
 
@@ -565,3 +567,142 @@ def mentor():
         latest_people_update=datetime.datetime(2021, 8, 2),
     )
     return [j]
+
+
+def create_test_bills_with_archived_versions(session, chamber):
+    """
+    Bills exercising OPEN-13's raw_text lookup: an archived bill (PDF+HTML, to prove PDF is
+    preferred), an unarchived bill (raw_text must be omitted, not error), and a bill whose
+    *latest* version isn't archived even though an older version is (raw_text must still be
+    omitted -- only the latest version's text is ever surfaced). Attached to an existing
+    jurisdiction/session/org (passed in) rather than a dedicated one, so as not to disturb
+    jurisdiction-count assumptions elsewhere in the test suite. Identifiers are deliberately
+    distinct from every other fixture bill's, since /bills?q=<bill id> matches globally, not
+    scoped to one jurisdiction.
+    """
+    archived_bill = Bill(
+        id="ocd-bill/archived-0001",
+        identifier="HB 9101",
+        title="An Act Relating to Scorpions",
+        legislative_session=session,
+        from_organization=chamber,
+        subject=[],
+        classification=["bill"],
+        extras={},
+        created_at=datetime.datetime.utcnow(),
+        updated_at=datetime.datetime.utcnow(),
+        latest_action_date="2026-01-01",
+    )
+    archived_version = BillVersion(
+        bill=archived_bill, note="Introduced", date="2026-01-01", classification=""
+    )
+    archived_pdf_link = BillVersionLink(
+        version=archived_version,
+        url="https://example.com/hb9101.pdf",
+        media_type="application/pdf",
+    )
+    archived_html_link = BillVersionLink(
+        version=archived_version,
+        url="https://example.com/hb9101.html",
+        media_type="text/html",
+    )
+    archived_pdf_doc = BillVersionDocument(
+        bill=archived_bill,
+        version_note="Introduced",
+        version_date="2026-01-01",
+        source_url="https://example.com/hb9101.pdf",
+        media_type="application/pdf",
+        raw_text="AN ACT relating to scorpions; designating the scorpion as the state arachnid.",
+        is_error=False,
+    )
+    archived_html_doc = BillVersionDocument(
+        bill=archived_bill,
+        version_note="Introduced",
+        version_date="2026-01-01",
+        source_url="https://example.com/hb9101.html",
+        media_type="text/html",
+        raw_text="<html>AN ACT relating to scorpions (HTML copy)</html>",
+        is_error=False,
+    )
+
+    unarchived_bill = Bill(
+        id="ocd-bill/unarchived-0002",
+        identifier="HB 9102",
+        title="An Act Relating to Newts",
+        legislative_session=session,
+        from_organization=chamber,
+        subject=[],
+        classification=["bill"],
+        extras={},
+        created_at=datetime.datetime.utcnow(),
+        updated_at=datetime.datetime.utcnow(),
+        latest_action_date="2026-01-01",
+    )
+    unarchived_version = BillVersion(
+        bill=unarchived_bill, note="Introduced", date="2026-01-01", classification=""
+    )
+    unarchived_link = BillVersionLink(
+        version=unarchived_version,
+        url="https://example.com/hb9102.pdf",
+        media_type="application/pdf",
+    )
+
+    stale_archive_bill = Bill(
+        id="ocd-bill/stale-archive-0003",
+        identifier="HB 9103",
+        title="An Act Relating to Salamanders",
+        legislative_session=session,
+        from_organization=chamber,
+        subject=[],
+        classification=["bill"],
+        extras={},
+        created_at=datetime.datetime.utcnow(),
+        updated_at=datetime.datetime.utcnow(),
+        latest_action_date="2026-02-01",
+    )
+    stale_archived_version = BillVersion(
+        bill=stale_archive_bill, note="Introduced", date="2026-01-01", classification=""
+    )
+    stale_archived_link = BillVersionLink(
+        version=stale_archived_version,
+        url="https://example.com/hb9103-introduced.pdf",
+        media_type="application/pdf",
+    )
+    stale_archived_doc = BillVersionDocument(
+        bill=stale_archive_bill,
+        version_note="Introduced",
+        version_date="2026-01-01",
+        source_url="https://example.com/hb9103-introduced.pdf",
+        media_type="application/pdf",
+        raw_text="AN ACT relating to salamanders (introduced version).",
+        is_error=False,
+    )
+    latest_unarchived_version = BillVersion(
+        bill=stale_archive_bill,
+        note="Committee Substitute",
+        date="2026-02-01",
+        classification="",
+    )
+    latest_unarchived_link = BillVersionLink(
+        version=latest_unarchived_version,
+        url="https://example.com/hb9103-cs.pdf",
+        media_type="application/pdf",
+    )
+
+    return [
+        archived_bill,
+        archived_version,
+        archived_pdf_link,
+        archived_html_link,
+        archived_pdf_doc,
+        archived_html_doc,
+        unarchived_bill,
+        unarchived_version,
+        unarchived_link,
+        stale_archive_bill,
+        stale_archived_version,
+        stale_archived_link,
+        stale_archived_doc,
+        latest_unarchived_version,
+        latest_unarchived_link,
+    ]

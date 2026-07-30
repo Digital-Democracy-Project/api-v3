@@ -24,6 +24,7 @@ from .bills import (
     BillDocumentLink,
     BillVersion,
     BillVersionLink,
+    BillVersionDocument,
     SearchableBill,
 )
 from .votes import VoteEvent, PersonVote, VoteCount, VoteSource

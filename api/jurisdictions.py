@@ -28,7 +28,7 @@ class JurisdictionPagination(Pagination):
     max_per_page = 52
 
     @classmethod
-    def postprocess_includes(cls, obj, data, includes):
+    def postprocess_includes(cls, obj, data, includes, *, detail=False):
         # latest runs needs to be set on each object individually, the 20-item
         # limit makes a subquery approach not work
         if JurisdictionInclude.latest_runs in includes:

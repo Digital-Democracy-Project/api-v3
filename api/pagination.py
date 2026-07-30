@@ -87,7 +87,9 @@ class Pagination:
         results = (
             results.limit(self.per_page).offset((self.page - 1) * self.per_page).all()
         )
-        results = [self.to_obj_with_includes(data, includes) for data in results]
+        results = [
+            self.to_obj_with_includes(data, includes, detail=False) for data in results
+        ]
 
         # make the data correct without the extra query
         if skip_count:
@@ -112,14 +114,14 @@ class Pagination:
             raise HTTPException(
                 status_code=404, detail=f"No such {cls.ObjCls.__name__}."
             )
-        return cls.to_obj_with_includes(obj, includes)
+        return cls.to_obj_with_includes(obj, includes, detail=True)
 
     @classmethod
-    def postprocess_includes(cls, obj, data, includes):
+    def postprocess_includes(cls, obj, data, includes, *, detail=False):
         pass
 
     @classmethod
-    def to_obj_with_includes(cls, data, includes):
+    def to_obj_with_includes(cls, data, includes, *, detail=False):
         """
         remove the non-included data from the response by setting the fields to
         None instead of [], and returning the Pydantic objects directly
@@ -128,7 +130,7 @@ class Pagination:
         for include in cls.IncludeEnum:
             if include not in includes:
                 setattr(newobj, include, None)
-        cls.postprocess_includes(newobj, data, includes)
+        cls.postprocess_includes(newobj, data, includes, detail=detail)
         return newobj
 
     @classmethod

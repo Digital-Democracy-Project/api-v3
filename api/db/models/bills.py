@@ -194,3 +194,25 @@ class SearchableBill(Base):
     search_vector = Column(TSVECTOR)
     bill_id = Column(String, ForeignKey(Bill.id))
     bill = relationship(Bill)
+
+
+class BillVersionDocument(Base):
+    """
+    Permanent per-version archive of a bill's original document + extracted text
+    (PLAN-bill-document-provenance.md, Phase 1), written by openstates-core's
+    archive_bill_versions(). Not FK-linked to BillVersion/BillVersionLink -- those rows get
+    deleted and recreated with new ids on any version-list change, so archived rows are matched
+    by content (bill_id, version_note, version_date, source_url) instead. See OPEN-13.
+    """
+
+    __tablename__ = "ddp_bill_version_document"
+
+    id = Column(Integer, primary_key=True, index=True)
+    bill_id = Column(String, ForeignKey(Bill.id))
+    bill = relationship(Bill)
+    version_note = Column(String)
+    version_date = Column(String)
+    source_url = Column(String)
+    media_type = Column(String)
+    raw_text = Column(Text)
+    is_error = Column(Boolean)
