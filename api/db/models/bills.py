@@ -216,3 +216,4 @@ class BillVersionDocument(Base):
     media_type = Column(String)
     raw_text = Column(Text)
     is_error = Column(Boolean)
+    diff_from_previous_version = Column(Text)

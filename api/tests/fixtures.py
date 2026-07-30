@@ -571,14 +571,17 @@ def mentor():
 
 def create_test_bills_with_archived_versions(session, chamber):
     """
-    Bills exercising OPEN-13's raw_text lookup: an archived bill (PDF+HTML, to prove PDF is
-    preferred), an unarchived bill (raw_text must be omitted, not error), and a bill whose
-    *latest* version isn't archived even though an older version is (raw_text must still be
-    omitted -- only the latest version's text is ever surfaced). Attached to an existing
-    jurisdiction/session/org (passed in) rather than a dedicated one, so as not to disturb
-    jurisdiction-count assumptions elsewhere in the test suite. Identifiers are deliberately
-    distinct from every other fixture bill's, since /bills?q=<bill id> matches globally, not
-    scoped to one jurisdiction.
+    Bills exercising OPEN-13's raw_text lookup and its bill_changelog extension (ddp-infra
+    fix, 2026-07-30): an archived bill (PDF+HTML, to prove PDF is preferred), an unarchived
+    bill (raw_text must be omitted, not error), a bill whose *latest* version isn't archived
+    even though an older version is (the older, immediately-previous version's raw_text must
+    still surface -- but a third, even-older archived version must not), and a bill with two
+    adjacent archived versions plus a precomputed diff_from_previous_version, exercising the
+    full bill_changelog shape (latest's raw_text + diff, previous version's own raw_text).
+    Attached to an existing jurisdiction/session/org (passed in) rather than a dedicated one,
+    so as not to disturb jurisdiction-count assumptions elsewhere in the test suite.
+    Identifiers are deliberately distinct from every other fixture bill's, since
+    /bills?q=<bill id> matches globally, not scoped to one jurisdiction.
     """
     archived_bill = Bill(
         id="ocd-bill/archived-0001",
@@ -688,6 +691,88 @@ def create_test_bills_with_archived_versions(session, chamber):
         url="https://example.com/hb9103-cs.pdf",
         media_type="application/pdf",
     )
+    # A third, even-older archived version -- proves the changelog lookup only ever surfaces
+    # the two most recent versions (latest + immediately-previous), not a bill's full archived
+    # history, even when older versions genuinely have their own archived text.
+    filed_version = BillVersion(
+        bill=stale_archive_bill, note="Filed", date="2025-12-01", classification=""
+    )
+    filed_link = BillVersionLink(
+        version=filed_version,
+        url="https://example.com/hb9103-filed.pdf",
+        media_type="application/pdf",
+    )
+    filed_doc = BillVersionDocument(
+        bill=stale_archive_bill,
+        version_note="Filed",
+        version_date="2025-12-01",
+        source_url="https://example.com/hb9103-filed.pdf",
+        media_type="application/pdf",
+        raw_text="AN ACT relating to salamanders (filed version).",
+        is_error=False,
+    )
+
+    # Two adjacent archived versions, both real (unlike HB 9103's mix of one archived/one not)
+    # -- exercises bill_changelog's actual use case: latest's raw_text + its precomputed
+    # diff_from_previous_version, plus the prior version's own raw_text (needed as
+    # dispatch_bill_changelog's old_bill_source), all surfaced together (ddp-infra's
+    # bill_changelog diff-endpoint fix, 2026-07-30).
+    changelog_bill = Bill(
+        id="ocd-bill/changelog-0004",
+        identifier="HB 9104",
+        title="An Act Relating to Frogs",
+        legislative_session=session,
+        from_organization=chamber,
+        subject=[],
+        classification=["bill"],
+        extras={},
+        created_at=datetime.datetime.utcnow(),
+        updated_at=datetime.datetime.utcnow(),
+        latest_action_date="2026-02-01",
+    )
+    changelog_prior_version = BillVersion(
+        bill=changelog_bill, note="Introduced", date="2026-01-01", classification=""
+    )
+    changelog_prior_link = BillVersionLink(
+        version=changelog_prior_version,
+        url="https://example.com/hb9104-introduced.pdf",
+        media_type="application/pdf",
+    )
+    changelog_prior_doc = BillVersionDocument(
+        bill=changelog_bill,
+        version_note="Introduced",
+        version_date="2026-01-01",
+        source_url="https://example.com/hb9104-introduced.pdf",
+        media_type="application/pdf",
+        raw_text="AN ACT relating to frogs (introduced version).",
+        is_error=False,
+        # First version ever archived -- no prior text to diff against, matching real
+        # archive_bill_versions() behavior.
+        diff_from_previous_version=None,
+    )
+    changelog_latest_version = BillVersion(
+        bill=changelog_bill, note="Engrossed", date="2026-02-01", classification=""
+    )
+    changelog_latest_link = BillVersionLink(
+        version=changelog_latest_version,
+        url="https://example.com/hb9104-engrossed.pdf",
+        media_type="application/pdf",
+    )
+    changelog_latest_doc = BillVersionDocument(
+        bill=changelog_bill,
+        version_note="Engrossed",
+        version_date="2026-02-01",
+        source_url="https://example.com/hb9104-engrossed.pdf",
+        media_type="application/pdf",
+        raw_text="AN ACT relating to frogs (engrossed version).",
+        is_error=False,
+        diff_from_previous_version=(
+            "--- Introduced\n+++ Engrossed\n"
+            "@@ -1 +1 @@\n"
+            "-AN ACT relating to frogs (introduced version).\n"
+            "+AN ACT relating to frogs (engrossed version).\n"
+        ),
+    )
 
     return [
         archived_bill,
@@ -705,4 +790,14 @@ def create_test_bills_with_archived_versions(session, chamber):
         stale_archived_doc,
         latest_unarchived_version,
         latest_unarchived_link,
+        filed_version,
+        filed_link,
+        filed_doc,
+        changelog_bill,
+        changelog_prior_version,
+        changelog_prior_link,
+        changelog_prior_doc,
+        changelog_latest_version,
+        changelog_latest_link,
+        changelog_latest_doc,
     ]

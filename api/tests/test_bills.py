@@ -465,17 +465,31 @@ def test_bill_detail_versions_raw_text_absent_when_not_archived(client):
         assert "raw_text" not in link
 
 
-def test_bill_detail_versions_raw_text_only_surfaced_for_latest_version(client):
+def test_bill_detail_versions_raw_text_surfaced_for_latest_and_previous_only(client):
     """
-    OPEN-13: only the latest version's text is ever surfaced -- an older, archived version's
-    text must not leak through when the bill's latest version itself isn't archived.
+    bill_changelog fix (2026-07-30): the version immediately before the latest one now also
+    surfaces its archived raw_text (needed as dispatch_bill_changelog's old_bill_source) --
+    but only that one. HB 9103's latest version ("Committee Substitute") isn't archived, so it
+    still shows no raw_text; the immediately-previous version ("Introduced") is archived and
+    now does; a third, even-older archived version ("Filed") must not leak through -- only the
+    two most recent versions are ever checked, not a bill's full history.
     """
     response = client.get("/bills/oh/2021/HB 9103?include=versions").json()
     assert response["identifier"] == "HB 9103"
-    assert len(response["versions"]) == 2
-    for version in response["versions"]:
-        for link in version["links"]:
-            assert "raw_text" not in link
+    assert len(response["versions"]) == 3
+    by_note = {v["note"]: v for v in response["versions"]}
+
+    for link in by_note["Committee Substitute"]["links"]:
+        assert "raw_text" not in link
+    assert "diff_from_previous_version" not in by_note["Committee Substitute"]
+
+    assert (
+        by_note["Introduced"]["links"][0]["raw_text"]
+        == "AN ACT relating to salamanders (introduced version)."
+    )
+
+    for link in by_note["Filed"]["links"]:
+        assert "raw_text" not in link
 
 
 def test_bills_list_endpoint_never_exposes_raw_text(client):
@@ -490,6 +504,42 @@ def test_bills_list_endpoint_never_exposes_raw_text(client):
     assert len(results) == 1
     for link in results[0]["versions"][0]["links"]:
         assert "raw_text" not in link
+
+
+def test_bill_detail_changelog_shape_latest_diff_and_previous_raw_text(client):
+    """
+    bill_changelog fix (2026-07-30): with two adjacent archived versions, the single-bill
+    detail endpoint now surfaces everything dispatch_bill_changelog needs without ddp-sync
+    re-fetching or re-diffing anything itself -- latest's own raw_text plus its precomputed
+    diff_from_previous_version (diff_source), and the immediately-previous version's raw_text
+    (old_bill_source). The previous version's own diff_from_previous_version stays absent --
+    it's the first version ever archived for this bill, nothing to diff against.
+    """
+    response = client.get("/bills/oh/2021/HB 9104?include=versions").json()
+    assert response["identifier"] == "HB 9104"
+    assert len(response["versions"]) == 2
+    by_note = {v["note"]: v for v in response["versions"]}
+
+    latest = by_note["Engrossed"]
+    assert latest["links"][0]["raw_text"] == "AN ACT relating to frogs (engrossed version)."
+    assert "Introduced" in latest["diff_from_previous_version"]
+    assert "Engrossed" in latest["diff_from_previous_version"]
+
+    previous = by_note["Introduced"]
+    assert previous["links"][0]["raw_text"] == "AN ACT relating to frogs (introduced version)."
+    assert "diff_from_previous_version" not in previous
+
+
+def test_bills_list_endpoint_never_exposes_diff_from_previous_version(client):
+    """Same bounded-response-size rule as raw_text (OPEN-13) applies to
+    diff_from_previous_version -- the /bills list must never set it either."""
+    response = client.get(
+        "/bills?jurisdiction=oh&session=2021&identifier=HB 9104&include=versions"
+    )
+    results = response.json()["results"]
+    assert len(results) == 1
+    for version in results[0]["versions"]:
+        assert "diff_from_previous_version" not in version
 
 
 def test_bills_documents_never_get_raw_text(client):

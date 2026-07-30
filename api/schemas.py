@@ -308,6 +308,19 @@ class BillDocumentOrVersion(BaseModel):
     date: str = Field(..., example="2020-10-01")
     classification: str = Field(..., example="amendment")
     links: List[BillDocumentLink]
+    diff_from_previous_version: Optional[str] = Field(
+        None,
+        example="--- a\n+++ b\n@@ -1 +1 @@\n-old text\n+new text",
+        description=(
+            "Precomputed difflib.unified_diff() of this version's archived text against the "
+            "immediately-preceding version's archived text (computed once per version at "
+            "archive time, not per document). Currently only populated for the latest version "
+            "of a bill and the version immediately before it, and only when queried through a "
+            "single-bill detail endpoint. Null if no archived diff exists for this version "
+            "(first version ever archived, a gap predating this pipeline, or a non-archived "
+            "jurisdiction)."
+        ),
+    )
 
     class Config:
         orm_mode = True
