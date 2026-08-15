@@ -774,12 +774,23 @@ def create_test_bills_with_archived_versions(session, chamber):
         ),
     )
 
-    # OPEN-92 regression fixture: two versions with NO dates (BillVersion.date is blank 100%
-    # of the time for every non-US-federal jurisdiction audited under OPEN-34) and notes whose
-    # real chronological order disagrees with plain alphabetical order -- "Enrolled" (final-
-    # passage stage) sorts BEFORE "Introduced" alphabetically ('E' < 'I'), but Introduced is
-    # actually the earlier version. A naive (date, note) sort therefore picks "Introduced" as
-    # latest; the correct, stage-aware ordering must pick "Enrolled".
+    # OPEN-92 regression fixture: three undated versions (BillVersion.date is blank 100% of
+    # the time for every non-US-federal jurisdiction audited under OPEN-34) whose real
+    # chronological order (Introduced -> Committee Substitute -> Enrolled) disagrees with
+    # plain alphabetical order ("Committee Substitute" < "Enrolled" < "Introduced"). A naive
+    # (date, note) sort picks "Introduced" as latest and "Enrolled" as previous -- attaching
+    # archived text to the wrong two versions and leaving the true previous version
+    # ("Committee Substitute") with none at all. The correct, stage-aware ordering must pick
+    # "Enrolled" as latest and "Committee Substitute" as previous, leaving "Introduced"
+    # unattached. Using three versions (not two) is deliberate: with only two versions,
+    # _attach_archived_document's identity-driven lookup (matched by bill+note+date+url, not
+    # by which role it was called for) attaches each version's own pre-baked document to
+    # itself regardless of mislabeled latest/previous roles, so a naive-vs-correct sort bug
+    # can silently pass a 2-version fixture's content assertions -- this was confirmed by
+    # reverting to the pre-fix sort and finding the original 2-version test still passed. The
+    # fixture rows are also inserted out of chronological order (Enrolled, then Introduced,
+    # then Committee Substitute) so the response's array order can't coincidentally match the
+    # correct order via insertion order alone if the stage-aware sort/reorder isn't applied.
     stage_divergence_bill = Bill(
         id="ocd-bill/stage-divergence-0005",
         identifier="HB 9105",
@@ -793,6 +804,32 @@ def create_test_bills_with_archived_versions(session, chamber):
         updated_at=datetime.datetime.utcnow(),
         latest_action_date="2026-01-01",
     )
+    # Inserted first despite being the true LATEST version -- see the fixture-ordering note
+    # above.
+    stage_divergence_enrolled_version = BillVersion(
+        bill=stage_divergence_bill, note="Enrolled", date="", classification=""
+    )
+    stage_divergence_enrolled_link = BillVersionLink(
+        version=stage_divergence_enrolled_version,
+        url="https://example.com/hb9105-enrolled.pdf",
+        media_type="application/pdf",
+    )
+    stage_divergence_enrolled_doc = BillVersionDocument(
+        bill=stage_divergence_bill,
+        version_note="Enrolled",
+        version_date="",
+        source_url="https://example.com/hb9105-enrolled.pdf",
+        media_type="application/pdf",
+        raw_text="AN ACT relating to toads (enrolled version).",
+        is_error=False,
+        diff_from_previous_version=(
+            "--- Committee Substitute\n+++ Enrolled\n"
+            "@@ -1 +1 @@\n"
+            "-AN ACT relating to toads (committee substitute version).\n"
+            "+AN ACT relating to toads (enrolled version).\n"
+        ),
+    )
+    # Inserted second despite being the true EARLIEST version.
     stage_divergence_introduced_version = BillVersion(
         bill=stage_divergence_bill, note="Introduced", date="", classification=""
     )
@@ -811,27 +848,31 @@ def create_test_bills_with_archived_versions(session, chamber):
         is_error=False,
         diff_from_previous_version=None,
     )
-    stage_divergence_enrolled_version = BillVersion(
-        bill=stage_divergence_bill, note="Enrolled", date="", classification=""
+    # Inserted last despite being the true PREVIOUS (middle) version -- the naive alphabetical
+    # sort ("Committee Substitute" < "Enrolled" < "Introduced") never selects this one as
+    # either latest or previous, so under the pre-fix code it gets no archived text attached
+    # at all.
+    stage_divergence_committee_sub_version = BillVersion(
+        bill=stage_divergence_bill, note="Committee Substitute", date="", classification=""
     )
-    stage_divergence_enrolled_link = BillVersionLink(
-        version=stage_divergence_enrolled_version,
-        url="https://example.com/hb9105-enrolled.pdf",
+    stage_divergence_committee_sub_link = BillVersionLink(
+        version=stage_divergence_committee_sub_version,
+        url="https://example.com/hb9105-committee-substitute.pdf",
         media_type="application/pdf",
     )
-    stage_divergence_enrolled_doc = BillVersionDocument(
+    stage_divergence_committee_sub_doc = BillVersionDocument(
         bill=stage_divergence_bill,
-        version_note="Enrolled",
+        version_note="Committee Substitute",
         version_date="",
-        source_url="https://example.com/hb9105-enrolled.pdf",
+        source_url="https://example.com/hb9105-committee-substitute.pdf",
         media_type="application/pdf",
-        raw_text="AN ACT relating to toads (enrolled version).",
+        raw_text="AN ACT relating to toads (committee substitute version).",
         is_error=False,
         diff_from_previous_version=(
-            "--- Introduced\n+++ Enrolled\n"
+            "--- Introduced\n+++ Committee Substitute\n"
             "@@ -1 +1 @@\n"
             "-AN ACT relating to toads (introduced version).\n"
-            "+AN ACT relating to toads (enrolled version).\n"
+            "+AN ACT relating to toads (committee substitute version).\n"
         ),
     )
 
@@ -862,10 +903,13 @@ def create_test_bills_with_archived_versions(session, chamber):
         changelog_latest_link,
         changelog_latest_doc,
         stage_divergence_bill,
-        stage_divergence_introduced_version,
-        stage_divergence_introduced_link,
-        stage_divergence_introduced_doc,
         stage_divergence_enrolled_version,
         stage_divergence_enrolled_link,
         stage_divergence_enrolled_doc,
+        stage_divergence_introduced_version,
+        stage_divergence_introduced_link,
+        stage_divergence_introduced_doc,
+        stage_divergence_committee_sub_version,
+        stage_divergence_committee_sub_link,
+        stage_divergence_committee_sub_doc,
     ]

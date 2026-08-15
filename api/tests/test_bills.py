@@ -543,32 +543,56 @@ def test_bills_list_endpoint_never_exposes_diff_from_previous_version(client):
 
 
 def test_bill_detail_latest_version_resolved_via_stage_not_alphabetical_order(client):
-    """OPEN-92: HB 9105 has two undated versions -- "Introduced" and "Enrolled" -- whose real
-    chronological order is the OPPOSITE of plain alphabetical order ("Enrolled" < "Introduced"
-    alphabetically, but Enrolled is the later, final-passage-stage version). Before this fix,
-    postprocess_includes's naive sorted(data.versions, key=lambda v: (v.date, v.note)) would
-    resolve "Introduced" as latest and attach its raw_text/diff there instead -- this asserts
-    the correct, stage-aware resolution: Enrolled is latest (gets diff_from_previous_version),
-    Introduced is previous (gets only its own raw_text, no diff)."""
+    """OPEN-92: HB 9105 has three undated versions -- "Introduced", "Committee Substitute",
+    "Enrolled" -- whose real chronological order (Introduced -> Committee Substitute ->
+    Enrolled) disagrees with plain alphabetical order ("Committee Substitute" < "Enrolled" <
+    "Introduced"). Before this fix, postprocess_includes's naive
+    sorted(data.versions, key=lambda v: (v.date, v.note)) would resolve "Introduced" as latest
+    and "Enrolled" as previous, attaching archived text to the wrong two versions and leaving
+    "Committee Substitute" -- the true previous version -- with none at all. This asserts the
+    correct, stage-aware resolution: "Enrolled" is latest (gets its own diff, from Committee
+    Substitute), "Committee Substitute" is previous (gets its own diff, from Introduced), and
+    "Introduced" -- selected by neither role under the fix -- gets no archived text at all.
+
+    A two-version version of this fixture (kept in git history) was found NOT to actually
+    distinguish old vs. new code: _attach_archived_document matches by bill+note+date+url
+    (not by which role it was called for), so with only two versions both always get their
+    own pre-baked document attached regardless of which one is mislabeled "latest"/"previous"
+    -- confirmed by reverting to the pre-fix sort and finding the 2-version test still passed.
+    The third version and the raw_text-presence/absence assertions below are what make this
+    version of the test actually fail against the pre-fix code."""
     response = client.get("/bills/oh/2021/HB 9105?include=versions").json()
     assert response["identifier"] == "HB 9105"
-    assert len(response["versions"]) == 2
+    assert len(response["versions"]) == 3
     by_note = {v["note"]: v for v in response["versions"]}
 
     latest = by_note["Enrolled"]
     assert latest["links"][0]["raw_text"] == "AN ACT relating to toads (enrolled version)."
-    assert "Introduced" in latest["diff_from_previous_version"]
+    assert "Committee Substitute" in latest["diff_from_previous_version"]
     assert "Enrolled" in latest["diff_from_previous_version"]
 
-    previous = by_note["Introduced"]
-    assert previous["links"][0]["raw_text"] == "AN ACT relating to toads (introduced version)."
+    previous = by_note["Committee Substitute"]
+    assert (
+        previous["links"][0]["raw_text"]
+        == "AN ACT relating to toads (committee substitute version)."
+    )
+    assert "Introduced" in previous["diff_from_previous_version"]
+    assert "Committee Substitute" in previous["diff_from_previous_version"]
+
+    # The true earliest version is selected as neither latest nor previous, so it must get no
+    # archived text at all -- under the pre-fix naive sort this version was wrongly picked as
+    # "latest" instead and DID get raw_text attached.
+    unattached = by_note["Introduced"]
+    assert "raw_text" not in unattached["links"][0]
+    assert "diff_from_previous_version" not in unattached
 
     # SYNC-16: the response array itself is reordered so a caller can take
     # versions[-1]/versions[-2] directly by plain array position, without re-deriving
-    # order itself -- this is the whole point of the fix from ddp-sync's side.
+    # order itself -- this is the whole point of the fix from ddp-sync's side. The fixture
+    # rows are inserted out of chronological order specifically so this can't pass by
+    # insertion-order coincidence.
     assert response["versions"][-1]["note"] == "Enrolled"
-    assert response["versions"][-2]["note"] == "Introduced"
-    assert "diff_from_previous_version" not in previous
+    assert response["versions"][-2]["note"] == "Committee Substitute"
 
 
 def test_bills_documents_never_get_raw_text(client):
