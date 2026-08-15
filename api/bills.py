@@ -11,6 +11,7 @@ from .schemas import Bill
 from .pagination import Pagination
 from .auth import apikey_auth
 from .utils import jurisdiction_filter
+from .version_ordering import STAGE_UNKNOWN, note_stage, version_sort_key
 
 
 class BillInclude(str, Enum):
@@ -110,9 +111,26 @@ class BillPagination(Pagination):
 
         db = object_session(data)
 
-        # "latest"/ordering matches the order_by("-date", "-note") convention already used for
-        # this purpose in openstates-core/openstates/cli/text_extract.py.
-        ordered = sorted(data.versions, key=lambda v: (v.date, v.note))
+        # OPEN-92: "latest"/"previous" must be resolved via openstates-core's own audited,
+        # content-based stage classifier (version_sort_key, OPEN-34) -- not a naive (date,
+        # note) alphabetical sort. A naive sort gets this wrong for most jurisdictions:
+        # BillVersion.date is blank 100% of the time outside US federal, so it degrades to a
+        # pure alphabetical note-string sort, which has no relationship to real chronology
+        # (e.g. "Enrolled" < "Introduced" alphabetically, but Enrolled is the later stage).
+        # version_ordering.py here is a deliberate, explicitly-synced copy of
+        # openstates-core's own implementation -- see that module's own docstring for why
+        # this isn't a real import (yet).
+        #
+        # A version whose note doesn't match any known stage (STAGE_UNKNOWN) is excluded from
+        # latest/previous selection entirely, matching openstates-core's own
+        # archive_bill_versions()/text_extract.py posture: a version this classifier can't
+        # confidently place is never guessed into the diff lineage.
+        classifiable = [
+            v for v in data.versions if note_stage(v.note)[0] != STAGE_UNKNOWN
+        ]
+        if not classifiable:
+            return
+        ordered = sorted(classifiable, key=lambda v: version_sort_key(v.note, v.date))
         latest = ordered[-1]
         cls._attach_archived_document(db, data, obj, latest)
 
@@ -125,6 +143,24 @@ class BillPagination(Pagination):
         if len(ordered) >= 2:
             previous = ordered[-2]
             cls._attach_archived_document(db, data, obj, previous)
+
+        # SYNC-16: ddp-sync's local_openstates_client.py used to re-derive "latest"/
+        # "previous" itself via the same naive (date, note) sort this fix just removed --
+        # the whole point of OPEN-90 is that no downstream consumer should ever need to
+        # re-derive this ordering again. Reorder obj.versions in place (unknown-stage
+        # versions first, in their original relative order, then the classifiable ones in
+        # correct chronological order) so the JSON response's own `versions` array always
+        # ends with [..., previous, latest] by plain array position -- a caller can take
+        # versions[-1]/versions[-2] directly, no re-sort of its own required. This changes
+        # array order only, never which/how many versions are returned.
+        data_versions = list(data.versions)
+        unknown_stage_indexes = [
+            i for i, v in enumerate(data_versions) if note_stage(v.note)[0] == STAGE_UNKNOWN
+        ]
+        ordered_indexes = [data_versions.index(v) for v in ordered]
+        obj.versions = [obj.versions[i] for i in unknown_stage_indexes] + [
+            obj.versions[i] for i in ordered_indexes
+        ]
 
 
 router = APIRouter()

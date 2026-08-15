@@ -542,6 +542,35 @@ def test_bills_list_endpoint_never_exposes_diff_from_previous_version(client):
         assert "diff_from_previous_version" not in version
 
 
+def test_bill_detail_latest_version_resolved_via_stage_not_alphabetical_order(client):
+    """OPEN-92: HB 9105 has two undated versions -- "Introduced" and "Enrolled" -- whose real
+    chronological order is the OPPOSITE of plain alphabetical order ("Enrolled" < "Introduced"
+    alphabetically, but Enrolled is the later, final-passage-stage version). Before this fix,
+    postprocess_includes's naive sorted(data.versions, key=lambda v: (v.date, v.note)) would
+    resolve "Introduced" as latest and attach its raw_text/diff there instead -- this asserts
+    the correct, stage-aware resolution: Enrolled is latest (gets diff_from_previous_version),
+    Introduced is previous (gets only its own raw_text, no diff)."""
+    response = client.get("/bills/oh/2021/HB 9105?include=versions").json()
+    assert response["identifier"] == "HB 9105"
+    assert len(response["versions"]) == 2
+    by_note = {v["note"]: v for v in response["versions"]}
+
+    latest = by_note["Enrolled"]
+    assert latest["links"][0]["raw_text"] == "AN ACT relating to toads (enrolled version)."
+    assert "Introduced" in latest["diff_from_previous_version"]
+    assert "Enrolled" in latest["diff_from_previous_version"]
+
+    previous = by_note["Introduced"]
+    assert previous["links"][0]["raw_text"] == "AN ACT relating to toads (introduced version)."
+
+    # SYNC-16: the response array itself is reordered so a caller can take
+    # versions[-1]/versions[-2] directly by plain array position, without re-deriving
+    # order itself -- this is the whole point of the fix from ddp-sync's side.
+    assert response["versions"][-1]["note"] == "Enrolled"
+    assert response["versions"][-2]["note"] == "Introduced"
+    assert "diff_from_previous_version" not in previous
+
+
 def test_bills_documents_never_get_raw_text(client):
     """OPEN-13: BillDocument (unlike BillVersion) is never archived by the pipeline, so
     documents[].links[].raw_text must always be absent, even on a single-bill detail query."""
