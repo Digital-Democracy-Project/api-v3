@@ -562,6 +562,12 @@ def test_bill_detail_latest_version_resolved_via_stage_not_alphabetical_order(cl
 
     previous = by_note["Introduced"]
     assert previous["links"][0]["raw_text"] == "AN ACT relating to toads (introduced version)."
+
+    # SYNC-16: the response array itself is reordered so a caller can take
+    # versions[-1]/versions[-2] directly by plain array position, without re-deriving
+    # order itself -- this is the whole point of the fix from ddp-sync's side.
+    assert response["versions"][-1]["note"] == "Enrolled"
+    assert response["versions"][-2]["note"] == "Introduced"
     assert "diff_from_previous_version" not in previous
 
 

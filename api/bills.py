@@ -144,6 +144,24 @@ class BillPagination(Pagination):
             previous = ordered[-2]
             cls._attach_archived_document(db, data, obj, previous)
 
+        # SYNC-16: ddp-sync's local_openstates_client.py used to re-derive "latest"/
+        # "previous" itself via the same naive (date, note) sort this fix just removed --
+        # the whole point of OPEN-90 is that no downstream consumer should ever need to
+        # re-derive this ordering again. Reorder obj.versions in place (unknown-stage
+        # versions first, in their original relative order, then the classifiable ones in
+        # correct chronological order) so the JSON response's own `versions` array always
+        # ends with [..., previous, latest] by plain array position -- a caller can take
+        # versions[-1]/versions[-2] directly, no re-sort of its own required. This changes
+        # array order only, never which/how many versions are returned.
+        data_versions = list(data.versions)
+        unknown_stage_indexes = [
+            i for i, v in enumerate(data_versions) if note_stage(v.note)[0] == STAGE_UNKNOWN
+        ]
+        ordered_indexes = [data_versions.index(v) for v in ordered]
+        obj.versions = [obj.versions[i] for i in unknown_stage_indexes] + [
+            obj.versions[i] for i in ordered_indexes
+        ]
+
 
 router = APIRouter()
 
