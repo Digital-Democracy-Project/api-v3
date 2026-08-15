@@ -11,6 +11,7 @@ from .schemas import Bill
 from .pagination import Pagination
 from .auth import apikey_auth
 from .utils import jurisdiction_filter
+from .version_ordering import STAGE_UNKNOWN, note_stage, version_sort_key
 
 
 class BillInclude(str, Enum):
@@ -110,9 +111,26 @@ class BillPagination(Pagination):
 
         db = object_session(data)
 
-        # "latest"/ordering matches the order_by("-date", "-note") convention already used for
-        # this purpose in openstates-core/openstates/cli/text_extract.py.
-        ordered = sorted(data.versions, key=lambda v: (v.date, v.note))
+        # OPEN-92: "latest"/"previous" must be resolved via openstates-core's own audited,
+        # content-based stage classifier (version_sort_key, OPEN-34) -- not a naive (date,
+        # note) alphabetical sort. A naive sort gets this wrong for most jurisdictions:
+        # BillVersion.date is blank 100% of the time outside US federal, so it degrades to a
+        # pure alphabetical note-string sort, which has no relationship to real chronology
+        # (e.g. "Enrolled" < "Introduced" alphabetically, but Enrolled is the later stage).
+        # version_ordering.py here is a deliberate, explicitly-synced copy of
+        # openstates-core's own implementation -- see that module's own docstring for why
+        # this isn't a real import (yet).
+        #
+        # A version whose note doesn't match any known stage (STAGE_UNKNOWN) is excluded from
+        # latest/previous selection entirely, matching openstates-core's own
+        # archive_bill_versions()/text_extract.py posture: a version this classifier can't
+        # confidently place is never guessed into the diff lineage.
+        classifiable = [
+            v for v in data.versions if note_stage(v.note)[0] != STAGE_UNKNOWN
+        ]
+        if not classifiable:
+            return
+        ordered = sorted(classifiable, key=lambda v: version_sort_key(v.note, v.date))
         latest = ordered[-1]
         cls._attach_archived_document(db, data, obj, latest)
 

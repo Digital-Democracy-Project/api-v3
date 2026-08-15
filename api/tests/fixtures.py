@@ -774,6 +774,67 @@ def create_test_bills_with_archived_versions(session, chamber):
         ),
     )
 
+    # OPEN-92 regression fixture: two versions with NO dates (BillVersion.date is blank 100%
+    # of the time for every non-US-federal jurisdiction audited under OPEN-34) and notes whose
+    # real chronological order disagrees with plain alphabetical order -- "Enrolled" (final-
+    # passage stage) sorts BEFORE "Introduced" alphabetically ('E' < 'I'), but Introduced is
+    # actually the earlier version. A naive (date, note) sort therefore picks "Introduced" as
+    # latest; the correct, stage-aware ordering must pick "Enrolled".
+    stage_divergence_bill = Bill(
+        id="ocd-bill/stage-divergence-0005",
+        identifier="HB 9105",
+        title="An Act Relating to Toads",
+        legislative_session=session,
+        from_organization=chamber,
+        subject=[],
+        classification=["bill"],
+        extras={},
+        created_at=datetime.datetime.utcnow(),
+        updated_at=datetime.datetime.utcnow(),
+        latest_action_date="2026-01-01",
+    )
+    stage_divergence_introduced_version = BillVersion(
+        bill=stage_divergence_bill, note="Introduced", date="", classification=""
+    )
+    stage_divergence_introduced_link = BillVersionLink(
+        version=stage_divergence_introduced_version,
+        url="https://example.com/hb9105-introduced.pdf",
+        media_type="application/pdf",
+    )
+    stage_divergence_introduced_doc = BillVersionDocument(
+        bill=stage_divergence_bill,
+        version_note="Introduced",
+        version_date="",
+        source_url="https://example.com/hb9105-introduced.pdf",
+        media_type="application/pdf",
+        raw_text="AN ACT relating to toads (introduced version).",
+        is_error=False,
+        diff_from_previous_version=None,
+    )
+    stage_divergence_enrolled_version = BillVersion(
+        bill=stage_divergence_bill, note="Enrolled", date="", classification=""
+    )
+    stage_divergence_enrolled_link = BillVersionLink(
+        version=stage_divergence_enrolled_version,
+        url="https://example.com/hb9105-enrolled.pdf",
+        media_type="application/pdf",
+    )
+    stage_divergence_enrolled_doc = BillVersionDocument(
+        bill=stage_divergence_bill,
+        version_note="Enrolled",
+        version_date="",
+        source_url="https://example.com/hb9105-enrolled.pdf",
+        media_type="application/pdf",
+        raw_text="AN ACT relating to toads (enrolled version).",
+        is_error=False,
+        diff_from_previous_version=(
+            "--- Introduced\n+++ Enrolled\n"
+            "@@ -1 +1 @@\n"
+            "-AN ACT relating to toads (introduced version).\n"
+            "+AN ACT relating to toads (enrolled version).\n"
+        ),
+    )
+
     return [
         archived_bill,
         archived_version,
@@ -800,4 +861,11 @@ def create_test_bills_with_archived_versions(session, chamber):
         changelog_latest_version,
         changelog_latest_link,
         changelog_latest_doc,
+        stage_divergence_bill,
+        stage_divergence_introduced_version,
+        stage_divergence_introduced_link,
+        stage_divergence_introduced_doc,
+        stage_divergence_enrolled_version,
+        stage_divergence_enrolled_link,
+        stage_divergence_enrolled_doc,
     ]
