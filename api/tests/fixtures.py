@@ -876,6 +876,99 @@ def create_test_bills_with_archived_versions(session, chamber):
         ),
     )
 
+    # OPEN-118 regression fixture: an unclassifiable-note version sits chronologically
+    # between two classifiable, archived versions. Real archive_bill_versions() never
+    # updates or reads `prior_text` for an unrecognized-stage version (see text_extract.py's
+    # archive_bill_versions() docstring) -- it's fully skipped in the lineage walk, so the
+    # next classifiable version's diff_from_previous_version is precomputed against the last
+    # *classifiable* version's text, never the unclassifiable one. This fixture's precomputed
+    # diff_from_previous_version values encode that same skip (Enrolled's diff references
+    # "Introduced", not the unclassifiable version in between), matching what the real
+    # pipeline would have written. The API itself never recomputes a diff -- it only decides
+    # which archived documents to attach -- so this proves postprocess_includes (a) still
+    # excludes the unclassifiable version from attachment entirely (OPEN-118 acceptance
+    # criterion) and (b) doesn't disrupt its classifiable neighbors' own already-correct
+    # attachments.
+    unclassifiable_bill = Bill(
+        id="ocd-bill/unclassifiable-0006",
+        identifier="HB 9106",
+        title="An Act Relating to Newts (Redux)",
+        legislative_session=session,
+        from_organization=chamber,
+        subject=[],
+        classification=["bill"],
+        extras={},
+        created_at=datetime.datetime.utcnow(),
+        updated_at=datetime.datetime.utcnow(),
+        latest_action_date="2026-03-01",
+    )
+    unclassifiable_introduced_version = BillVersion(
+        bill=unclassifiable_bill, note="Introduced", date="2026-01-01", classification=""
+    )
+    unclassifiable_introduced_link = BillVersionLink(
+        version=unclassifiable_introduced_version,
+        url="https://example.com/hb9106-introduced.pdf",
+        media_type="application/pdf",
+    )
+    unclassifiable_introduced_doc = BillVersionDocument(
+        bill=unclassifiable_bill,
+        version_note="Introduced",
+        version_date="2026-01-01",
+        source_url="https://example.com/hb9106-introduced.pdf",
+        media_type="application/pdf",
+        raw_text="AN ACT relating to newts (introduced version).",
+        is_error=False,
+        diff_from_previous_version=None,
+    )
+    # note_stage() matches none of version_ordering.py's known patterns -- the same example
+    # openstates-core's own text_extract.py tests use for an unrecognized-stage note.
+    unclassifiable_middle_version = BillVersion(
+        bill=unclassifiable_bill,
+        note="Some Never-Before-Seen Document Type",
+        date="2026-02-01",
+        classification="",
+    )
+    unclassifiable_middle_link = BillVersionLink(
+        version=unclassifiable_middle_version,
+        url="https://example.com/hb9106-mystery.pdf",
+        media_type="application/pdf",
+    )
+    unclassifiable_middle_doc = BillVersionDocument(
+        bill=unclassifiable_bill,
+        version_note="Some Never-Before-Seen Document Type",
+        version_date="2026-02-01",
+        source_url="https://example.com/hb9106-mystery.pdf",
+        media_type="application/pdf",
+        raw_text="AN ACT relating to newts (mystery version).",
+        is_error=False,
+        diff_from_previous_version=None,
+    )
+    unclassifiable_enrolled_version = BillVersion(
+        bill=unclassifiable_bill, note="Enrolled", date="2026-03-01", classification=""
+    )
+    unclassifiable_enrolled_link = BillVersionLink(
+        version=unclassifiable_enrolled_version,
+        url="https://example.com/hb9106-enrolled.pdf",
+        media_type="application/pdf",
+    )
+    unclassifiable_enrolled_doc = BillVersionDocument(
+        bill=unclassifiable_bill,
+        version_note="Enrolled",
+        version_date="2026-03-01",
+        source_url="https://example.com/hb9106-enrolled.pdf",
+        media_type="application/pdf",
+        raw_text="AN ACT relating to newts (enrolled version).",
+        is_error=False,
+        # Diffed against "Introduced", skipping the unclassifiable middle version entirely --
+        # matching real archive_bill_versions() lineage-walk behavior.
+        diff_from_previous_version=(
+            "--- Introduced\n+++ Enrolled\n"
+            "@@ -1 +1 @@\n"
+            "-AN ACT relating to newts (introduced version).\n"
+            "+AN ACT relating to newts (enrolled version).\n"
+        ),
+    )
+
     return [
         archived_bill,
         archived_version,
@@ -912,4 +1005,14 @@ def create_test_bills_with_archived_versions(session, chamber):
         stage_divergence_committee_sub_version,
         stage_divergence_committee_sub_link,
         stage_divergence_committee_sub_doc,
+        unclassifiable_bill,
+        unclassifiable_introduced_version,
+        unclassifiable_introduced_link,
+        unclassifiable_introduced_doc,
+        unclassifiable_middle_version,
+        unclassifiable_middle_link,
+        unclassifiable_middle_doc,
+        unclassifiable_enrolled_version,
+        unclassifiable_enrolled_link,
+        unclassifiable_enrolled_doc,
     ]

@@ -465,14 +465,13 @@ def test_bill_detail_versions_raw_text_absent_when_not_archived(client):
         assert "raw_text" not in link
 
 
-def test_bill_detail_versions_raw_text_surfaced_for_latest_and_previous_only(client):
+def test_bill_detail_versions_raw_text_surfaced_for_every_classifiable_version(client):
     """
-    bill_changelog fix (2026-07-30): the version immediately before the latest one now also
-    surfaces its archived raw_text (needed as dispatch_bill_changelog's old_bill_source) --
-    but only that one. HB 9103's latest version ("Committee Substitute") isn't archived, so it
-    still shows no raw_text; the immediately-previous version ("Introduced") is archived and
-    now does; a third, even-older archived version ("Filed") must not leak through -- only the
-    two most recent versions are ever checked, not a bill's full history.
+    OPEN-118: archived raw_text is surfaced for every classifiable version with an archived
+    document, not just the latest and the one immediately before it. HB 9103's latest version
+    ("Committee Substitute") isn't archived, so it still shows no raw_text; the two older
+    versions ("Introduced" and "Filed") are both archived and now both surface raw_text, even
+    though "Filed" is two hops back from latest.
     """
     response = client.get("/bills/oh/2021/HB 9103?include=versions").json()
     assert response["identifier"] == "HB 9103"
@@ -488,8 +487,10 @@ def test_bill_detail_versions_raw_text_surfaced_for_latest_and_previous_only(cli
         == "AN ACT relating to salamanders (introduced version)."
     )
 
-    for link in by_note["Filed"]["links"]:
-        assert "raw_text" not in link
+    assert (
+        by_note["Filed"]["links"][0]["raw_text"]
+        == "AN ACT relating to salamanders (filed version)."
+    )
 
 
 def test_bills_list_endpoint_never_exposes_raw_text(client):
@@ -546,21 +547,24 @@ def test_bill_detail_latest_version_resolved_via_stage_not_alphabetical_order(cl
     """OPEN-92: HB 9105 has three undated versions -- "Introduced", "Committee Substitute",
     "Enrolled" -- whose real chronological order (Introduced -> Committee Substitute ->
     Enrolled) disagrees with plain alphabetical order ("Committee Substitute" < "Enrolled" <
-    "Introduced"). Before this fix, postprocess_includes's naive
+    "Introduced"). Before the OPEN-92 fix, postprocess_includes's naive
     sorted(data.versions, key=lambda v: (v.date, v.note)) would resolve "Introduced" as latest
-    and "Enrolled" as previous, attaching archived text to the wrong two versions and leaving
-    "Committee Substitute" -- the true previous version -- with none at all. This asserts the
-    correct, stage-aware resolution: "Enrolled" is latest (gets its own diff, from Committee
-    Substitute), "Committee Substitute" is previous (gets its own diff, from Introduced), and
-    "Introduced" -- selected by neither role under the fix -- gets no archived text at all.
+    and "Enrolled" as previous, attaching archived text to the wrong two versions. This asserts
+    the correct, stage-aware resolution: "Enrolled" is latest (gets its own diff, from
+    Committee Substitute) and "Committee Substitute" is previous (gets its own diff, from
+    Introduced) -- plus, per OPEN-118, "Introduced" (the true earliest version, selected by
+    neither the latest nor previous role) still gets its own archived raw_text, since every
+    classifiable version does now, with no diff_from_previous_version since it's the first
+    version ever archived for this bill (nothing to diff against, matching real
+    archive_bill_versions() behavior).
 
     A two-version version of this fixture (kept in git history) was found NOT to actually
-    distinguish old vs. new code: _attach_archived_document matches by bill+note+date+url
-    (not by which role it was called for), so with only two versions both always get their
-    own pre-baked document attached regardless of which one is mislabeled "latest"/"previous"
-    -- confirmed by reverting to the pre-fix sort and finding the 2-version test still passed.
-    The third version and the raw_text-presence/absence assertions below are what make this
-    version of the test actually fail against the pre-fix code."""
+    distinguish old vs. new OPEN-92 code: _attach_archived_document matches by
+    bill+note+date+url (not by which role it was called for), so with only two versions both
+    always get their own pre-baked document attached regardless of which one is mislabeled
+    "latest"/"previous" -- confirmed by reverting to the pre-OPEN-92-fix sort and finding the
+    2-version test still passed. The third version is what makes this version of the test
+    actually fail against the pre-OPEN-92-fix code."""
     response = client.get("/bills/oh/2021/HB 9105?include=versions").json()
     assert response["identifier"] == "HB 9105"
     assert len(response["versions"]) == 3
@@ -579,12 +583,14 @@ def test_bill_detail_latest_version_resolved_via_stage_not_alphabetical_order(cl
     assert "Introduced" in previous["diff_from_previous_version"]
     assert "Committee Substitute" in previous["diff_from_previous_version"]
 
-    # The true earliest version is selected as neither latest nor previous, so it must get no
-    # archived text at all -- under the pre-fix naive sort this version was wrongly picked as
-    # "latest" instead and DID get raw_text attached.
-    unattached = by_note["Introduced"]
-    assert "raw_text" not in unattached["links"][0]
-    assert "diff_from_previous_version" not in unattached
+    # OPEN-118: the true earliest version is selected as neither latest nor previous, but it
+    # still surfaces its own archived raw_text now -- only its diff_from_previous_version
+    # stays absent, since it's the first version ever archived for this bill.
+    earliest = by_note["Introduced"]
+    assert (
+        earliest["links"][0]["raw_text"] == "AN ACT relating to toads (introduced version)."
+    )
+    assert "diff_from_previous_version" not in earliest
 
     # SYNC-16: the response array itself is reordered so a caller can take
     # versions[-1]/versions[-2] directly by plain array position, without re-deriving
@@ -593,6 +599,46 @@ def test_bill_detail_latest_version_resolved_via_stage_not_alphabetical_order(cl
     # insertion-order coincidence.
     assert response["versions"][-1]["note"] == "Enrolled"
     assert response["versions"][-2]["note"] == "Committee Substitute"
+
+
+def test_bill_detail_unclassifiable_version_excluded_from_middle_of_lineage(client):
+    """
+    OPEN-118 acceptance criterion: a version with an unclassifiable stage note is still
+    excluded from diff lineage, even when it sits chronologically between two classifiable,
+    archived versions (not just when it's the oldest/newest). HB 9106 has "Introduced"
+    (classifiable, earliest), "Some Never-Before-Seen Document Type" (unclassifiable, middle),
+    and "Enrolled" (classifiable, latest) -- all three archived. The unclassifiable version
+    must get neither raw_text nor diff_from_previous_version, and "Enrolled"'s own precomputed
+    diff (matching real archive_bill_versions() lineage-walk behavior) skips straight past it
+    to "Introduced".
+    """
+    response = client.get("/bills/oh/2021/HB 9106?include=versions").json()
+    assert response["identifier"] == "HB 9106"
+    assert len(response["versions"]) == 3
+    by_note = {v["note"]: v for v in response["versions"]}
+
+    mystery = by_note["Some Never-Before-Seen Document Type"]
+    assert "raw_text" not in mystery["links"][0]
+    assert "diff_from_previous_version" not in mystery
+
+    introduced = by_note["Introduced"]
+    assert (
+        introduced["links"][0]["raw_text"] == "AN ACT relating to newts (introduced version)."
+    )
+    assert "diff_from_previous_version" not in introduced
+
+    enrolled = by_note["Enrolled"]
+    assert enrolled["links"][0]["raw_text"] == "AN ACT relating to newts (enrolled version)."
+    assert "Introduced" in enrolled["diff_from_previous_version"]
+    assert "Enrolled" in enrolled["diff_from_previous_version"]
+    assert "Some Never-Before-Seen Document Type" not in enrolled["diff_from_previous_version"]
+
+    # The unclassifiable version is excluded from the classifiable ordering entirely, so it
+    # stays in its original relative position (first, per postprocess_includes's
+    # unknown_stage_indexes-first reorder) rather than being sorted in between its neighbors.
+    assert response["versions"][0]["note"] == "Some Never-Before-Seen Document Type"
+    assert response["versions"][-1]["note"] == "Enrolled"
+    assert response["versions"][-2]["note"] == "Introduced"
 
 
 def test_bills_documents_never_get_raw_text(client):

@@ -100,8 +100,9 @@ class BillPagination(Pagination):
     @classmethod
     def postprocess_includes(cls, obj, data, includes, *, detail=False):
         """
-        Attach archived raw_text (OPEN-13) to the latest version's preferred link, and to the
-        version immediately before it (PLAN-bill-document-provenance.md Phase 8's
+        Attach archived raw_text (OPEN-13) and diff_from_previous_version to every
+        classifiable version's preferred link (OPEN-118; originally just the latest version
+        and the one immediately before it, per PLAN-bill-document-provenance.md Phase 8's
         bill_changelog work, ddp-infra "excellent news" fix 2026-07-30) -- single-bill detail
         queries only, a paginated /bills list never gets full document text, to keep response
         size bounded.
@@ -131,18 +132,19 @@ class BillPagination(Pagination):
         if not classifiable:
             return
         ordered = sorted(classifiable, key=lambda v: version_sort_key(v.note, v.date))
-        latest = ordered[-1]
-        cls._attach_archived_document(db, data, obj, latest)
 
-        # bill_changelog (ddp-sync) needs the *prior* version's own raw_text as its
-        # old_bill_source, plus latest's diff_from_previous_version (attached above) as its
-        # diff_source -- both already computed and archived by archive_bill_versions(), never
-        # re-derived here. Only two versions ever need archived text through this endpoint
-        # (latest + the one immediately before it) -- a bill's full version history is not a
-        # single-bill-detail-endpoint use case.
-        if len(ordered) >= 2:
-            previous = ordered[-2]
-            cls._attach_archived_document(db, data, obj, previous)
+        # OPEN-118: every classifiable version gets its own archived raw_text and
+        # diff_from_previous_version resolved here, not just the latest version and the one
+        # immediately before it -- NEXT-23 (via BROKER-101's /api/bill-versions/history/
+        # endpoint) lets a reader pick any version transition, so a diff must be resolvable
+        # for every hop, not only the last one. Both fields are already computed and archived
+        # per-version by archive_bill_versions(), never re-derived here; a version whose stage
+        # note is unclassifiable (excluded from `classifiable` above) still never gets either
+        # field, same as before this change. Response size stays single-bill-detail-bound --
+        # this widens the bound from "2 versions" to "this bill's own version count", it
+        # doesn't remove the bound (the paginated /bills list is untouched, see below).
+        for version in ordered:
+            cls._attach_archived_document(db, data, obj, version)
 
         # SYNC-16: ddp-sync's local_openstates_client.py used to re-derive "latest"/
         # "previous" itself via the same naive (date, note) sort this fix just removed --
