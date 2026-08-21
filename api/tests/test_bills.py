@@ -601,6 +601,46 @@ def test_bill_detail_latest_version_resolved_via_stage_not_alphabetical_order(cl
     assert response["versions"][-2]["note"] == "Committee Substitute"
 
 
+def test_bill_detail_unclassifiable_version_excluded_from_middle_of_lineage(client):
+    """
+    OPEN-118 acceptance criterion: a version with an unclassifiable stage note is still
+    excluded from diff lineage, even when it sits chronologically between two classifiable,
+    archived versions (not just when it's the oldest/newest). HB 9106 has "Introduced"
+    (classifiable, earliest), "Some Never-Before-Seen Document Type" (unclassifiable, middle),
+    and "Enrolled" (classifiable, latest) -- all three archived. The unclassifiable version
+    must get neither raw_text nor diff_from_previous_version, and "Enrolled"'s own precomputed
+    diff (matching real archive_bill_versions() lineage-walk behavior) skips straight past it
+    to "Introduced".
+    """
+    response = client.get("/bills/oh/2021/HB 9106?include=versions").json()
+    assert response["identifier"] == "HB 9106"
+    assert len(response["versions"]) == 3
+    by_note = {v["note"]: v for v in response["versions"]}
+
+    mystery = by_note["Some Never-Before-Seen Document Type"]
+    assert "raw_text" not in mystery["links"][0]
+    assert "diff_from_previous_version" not in mystery
+
+    introduced = by_note["Introduced"]
+    assert (
+        introduced["links"][0]["raw_text"] == "AN ACT relating to newts (introduced version)."
+    )
+    assert "diff_from_previous_version" not in introduced
+
+    enrolled = by_note["Enrolled"]
+    assert enrolled["links"][0]["raw_text"] == "AN ACT relating to newts (enrolled version)."
+    assert "Introduced" in enrolled["diff_from_previous_version"]
+    assert "Enrolled" in enrolled["diff_from_previous_version"]
+    assert "Some Never-Before-Seen Document Type" not in enrolled["diff_from_previous_version"]
+
+    # The unclassifiable version is excluded from the classifiable ordering entirely, so it
+    # stays in its original relative position (first, per postprocess_includes's
+    # unknown_stage_indexes-first reorder) rather than being sorted in between its neighbors.
+    assert response["versions"][0]["note"] == "Some Never-Before-Seen Document Type"
+    assert response["versions"][-1]["note"] == "Enrolled"
+    assert response["versions"][-2]["note"] == "Introduced"
+
+
 def test_bills_documents_never_get_raw_text(client):
     """OPEN-13: BillDocument (unlike BillVersion) is never archived by the pipeline, so
     documents[].links[].raw_text must always be absent, even on a single-bill detail query."""
