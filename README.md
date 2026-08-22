@@ -4,6 +4,14 @@ This repository contains the code responsible for v3 of the Open States API.
 
 Report API Issues at https://github.com/openstates/issues/
 
+## Digital Democracy Project fork
+
+This is [Digital Democracy Project](https://digitaldemocracyproject.org)'s fork, used to power our own civic-data pipeline.
+
+- `origin` → this fork; `upstream` → the public project.
+- Our own fixes land on this fork's `main` via a normal branch + PR — no cherry-picking, no separate patch branch.
+- Public upstream is merged into `main` on a periodic (roughly monthly, or opportunistic) cadence.
+
 ## Links
 
 * [Contributor's Guide](https://docs.openstates.org/en/latest/contributing/getting-started.html)
