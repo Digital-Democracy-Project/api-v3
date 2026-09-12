@@ -17,8 +17,9 @@ unit of reuse for a connection pool is the physical database connection, not the
 This module is wired into the engine's `do_connect` event instead (see api/db/__init__.py),
 which fires once per NEW physical connection the pool opens: already-open connections keep
 using whatever credential they connected with (Postgres doesn't kill a live session when
-the password changes elsewhere), so a rotation is picked up the next time the pool needs to
-open a fresh connection -- never later than one `pool_recycle` interval.
+the password changes elsewhere), so a rotation is picked up the next time a connection is
+checked out and due for recycling under `pool_recycle` (or the pool otherwise needs a
+genuinely new connection) -- not on a standalone background timer.
 
 RDS's managed secret is JSON with `username`/`password` fields only (confirmed directly
 against the real secret in OPEN-260 -- no host/port/dbname fields exist in it). Deliberately
@@ -37,11 +38,19 @@ import logging
 import os
 
 import boto3
+from botocore.config import Config
 
 logger = logging.getLogger(__name__)
 
 RDS_CREDENTIALS_SECRET_ARN = os.environ.get("RDS_CREDENTIALS_SECRET_ARN")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+
+# pm-review (OPEN-279): a `do_connect` call has no pool_timeout backstop of its own -- that
+# setting only bounds waiting for a pooled *slot*, not the do_connect callback's own network
+# I/O once a slot is available. Without a bounded client config here, a slow/hung Secrets
+# Manager call could block a connection attempt (and, transitively, whatever pool-exhaustion
+# symptoms that causes) far longer than this app's own request-handling timeouts expect.
+_SECRETSMANAGER_CLIENT_CONFIG = Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 2})
 
 
 def resolve_rds_credentials(secretsmanager_client=None) -> tuple[dict | None, str]:
@@ -60,7 +69,9 @@ def resolve_rds_credentials(secretsmanager_client=None) -> tuple[dict | None, st
         return None, "RDS_CREDENTIALS_SECRET_ARN not set -- refusing to guess which secret to read"
 
     try:
-        client = secretsmanager_client or boto3.client("secretsmanager", region_name=AWS_REGION)
+        client = secretsmanager_client or boto3.client(
+            "secretsmanager", region_name=AWS_REGION, config=_SECRETSMANAGER_CLIENT_CONFIG
+        )
         response = client.get_secret_value(SecretId=RDS_CREDENTIALS_SECRET_ARN)
     except Exception as e:  # noqa: BLE001 -- any boto3/network failure is equally "can't proceed"
         # boto3.client() itself can raise (region/credential-provider/botocore config

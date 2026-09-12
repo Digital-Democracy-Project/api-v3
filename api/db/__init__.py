@@ -62,9 +62,13 @@ engine = create_engine(
 if RESOLVE_RDS_LIVE:
     # Fires once per NEW physical connection the pool opens -- not once per checkout, and
     # not once per request. Already-open pooled connections are unaffected by a credential
-    # change elsewhere (Postgres doesn't kill a live session when the password rotates), so
-    # this picks up a rotation the next time the pool needs a fresh connection, never later
-    # than one pool_recycle interval (7200s/2h) from here.
+    # change elsewhere (Postgres doesn't kill a live session when the password rotates).
+    # pm-review correction: pool_recycle (7200s/2h) doesn't proactively reconnect an idle
+    # connection on a timer -- SQLAlchemy checks a connection's age against pool_recycle at
+    # its next *checkout* and replaces it then if it's aged out. So a rotation is picked up
+    # the next time a connection is both checked out AND due for recycling (or the pool
+    # otherwise needs a genuinely new connection, e.g. after an error) -- bounded by
+    # pool_recycle, but not on a standalone background schedule.
     @event.listens_for(engine, "do_connect")
     def _inject_live_rds_credentials(dialect, conn_rec, cargs, cparams):
         credentials, error = resolve_rds_credentials()

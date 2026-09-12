@@ -268,15 +268,35 @@ def test_existing_connection_unaffected_by_a_later_credential_change(monkeypatch
     assert conn1.execute("SELECT 1").scalar() == 1
     assert call_count["n"] == 1
 
-    # "Rotate": resolve_rds_credentials now returns a set of credentials that would fail if
-    # actually used to authenticate a NEW connection -- if the already-open conn1 were forced
-    # to re-authenticate, this would break it. It shouldn't be.
+    # "Rotate" to a real second role with a different password (not just a wrong-credential
+    # sentinel) -- proves both halves of the claim with one real rotation: the already-open
+    # conn1 is untouched (this role change would break it if it tried to re-authenticate),
+    # AND a genuinely new connection opened after this point picks up the new role, not a
+    # cached one from conn1's own do_connect call.
+    conn1.execute("DROP ROLE IF EXISTS rds_credentials_rotation_test_role")
+    conn1.execute(
+        "CREATE ROLE rds_credentials_rotation_test_role LOGIN PASSWORD 'rotated-password' "
+        "IN ROLE v3test"
+    )
+
     def fake_resolve_after_rotation(secretsmanager_client=None):
         call_count["n"] += 1
-        return {"username": "wrong-user-does-not-exist", "password": "wrong-password"}, ""
+        return {"username": "rds_credentials_rotation_test_role", "password": "rotated-password"}, ""
 
     monkeypatch.setattr(db_module, "resolve_rds_credentials", fake_resolve_after_rotation)
 
     # The already-open connection is untouched by the "rotation" above.
     assert conn1.execute("SELECT 1").scalar() == 1
-    conn1.close()
+
+    # A genuinely NEW connection, opened after the "rotation", authenticates as the NEW role
+    # -- proving do_connect actually re-invokes resolve_rds_credentials per new connection
+    # rather than reusing whatever conn1 resolved at its own connect time.
+    conn2 = db_module.engine.connect()
+    try:
+        assert conn2.execute("SELECT current_user").scalar() == "rds_credentials_rotation_test_role"
+        # do_connect only fires on a NEW physical connection, never on execute() against an
+        # already-open one -- exactly 2 calls total: conn1's own connect, and conn2's.
+        assert call_count["n"] == 2
+    finally:
+        conn2.close()
+        conn1.close()
