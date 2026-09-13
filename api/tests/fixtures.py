@@ -609,6 +609,11 @@ def create_test_bills_with_archived_versions(session, chamber):
         url="https://example.com/hb9101.html",
         media_type="text/html",
     )
+    # SYNC-65: a real, explicit updated_at -- these two are the only BillVersionDocument
+    # fixtures in this jurisdiction that set it, specifically so
+    # test_bills_filter_by_document_updated_since has a real "archived recently" bill
+    # (archived_bill) and a real "never archived" bill (unarchived_bill, no document at all)
+    # to distinguish between.
     archived_pdf_doc = BillVersionDocument(
         bill=archived_bill,
         version_note="Introduced",
@@ -617,6 +622,7 @@ def create_test_bills_with_archived_versions(session, chamber):
         media_type="application/pdf",
         raw_text="AN ACT relating to scorpions; designating the scorpion as the state arachnid.",
         is_error=False,
+        updated_at=datetime.datetime(2026, 1, 15, tzinfo=datetime.timezone.utc),
     )
     archived_html_doc = BillVersionDocument(
         bill=archived_bill,
@@ -626,6 +632,7 @@ def create_test_bills_with_archived_versions(session, chamber):
         media_type="text/html",
         raw_text="<html>AN ACT relating to scorpions (HTML copy)</html>",
         is_error=False,
+        updated_at=datetime.datetime(2026, 1, 15, tzinfo=datetime.timezone.utc),
     )
 
     unarchived_bill = Bill(

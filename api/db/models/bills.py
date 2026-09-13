@@ -217,3 +217,7 @@ class BillVersionDocument(Base):
     raw_text = Column(Text)
     is_error = Column(Boolean)
     diff_from_previous_version = Column(Text)
+    # SYNC-65: mapped so /bills?document_updated_since= can filter on it directly -- this
+    # column already exists on the underlying table (Django's own auto_now=True field), just
+    # wasn't mapped here since nothing previously needed to query it.
+    updated_at = Column(DateTime(timezone=True))

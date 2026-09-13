@@ -96,6 +96,30 @@ def test_bills_filter_by_updated_since(client):
     assert len(response.json()["results"]) == 0
 
 
+def test_bills_filter_by_document_updated_since(client):
+    """SYNC-65: distinct from updated_since -- archive_bill_versions() never touches
+    Bill.updated_at, only the BillVersionDocument row's own updated_at, so this needs
+    its own filter rather than reusing Bill.updated_at.
+
+    archived_bill/unarchived_bill (create_test_bills_with_archived_versions) are Ohio
+    fixtures, not Nebraska -- see test_bills_filter_by_identifier's own jurisdiction=oh
+    usage for the same jurisdiction."""
+    response = client.get("/bills?jurisdiction=oh&document_updated_since=2026-01-01")
+    results = response.json()["results"]
+    # archived_bill has two archived documents dated 2026-01-15 -- must appear exactly
+    # once (not duplicated per matching document row -- an `in_(subquery)` filter, not
+    # a join, is what guarantees this).
+    matches = [b for b in results if b["id"] == "ocd-bill/archived-0001"]
+    assert len(matches) == 1
+    # unarchived_bill has no BillVersionDocument row at all -- must not match.
+    assert "ocd-bill/unarchived-0002" not in {b["id"] for b in results}
+
+    response = client.get("/bills?jurisdiction=oh&document_updated_since=2032-01-01T00:00:00")
+    assert "ocd-bill/archived-0001" not in {
+        b["id"] for b in response.json()["results"]
+    }
+
+
 def test_bills_filter_by_created_since(client):
     response = client.get("/bills?jurisdiction=ne&created_since=2020-01-01T00:00")
     assert len(response.json()["results"]) == 7
