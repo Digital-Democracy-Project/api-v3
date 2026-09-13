@@ -217,6 +217,16 @@ async def bills_search(
     created_since: Optional[str] = Query(
         None, description="Filter to only include bills created since a given date."
     ),
+    document_updated_since: Optional[str] = Query(
+        None,
+        description=(
+            "Filter to only include bills with an archived version document "
+            "(ddp_bill_version_document) updated since a given date. SYNC-65: distinct from "
+            "updated_since -- archive_bill_versions() never touches Bill.updated_at, only "
+            "the document row's own updated_at, so a bill whose text was just archived does "
+            "not necessarily show up under updated_since."
+        ),
+    ),
     action_since: Optional[str] = Query(
         None,
         description="Filter to only include bills with an action since a given date.",
@@ -313,6 +323,19 @@ async def bills_search(
         if created_since:
             query = query.filter(
                 models.Bill.created_at >= datetime.datetime.fromisoformat(created_since)
+            )
+        if document_updated_since:
+            # SYNC-65: an `in_(subquery)` rather than a join+distinct -- a bill can have
+            # several matching BillVersionDocument rows (one per archived file), and a join
+            # would return one duplicate Bill row per match. The subquery form filters
+            # Bill.id membership without ever widening the row count.
+            document_cutoff = datetime.datetime.fromisoformat(document_updated_since)
+            query = query.filter(
+                models.Bill.id.in_(
+                    db.query(models.BillVersionDocument.bill_id).filter(
+                        models.BillVersionDocument.updated_at >= document_cutoff
+                    )
+                )
             )
     except ValueError:
         raise HTTPException(
