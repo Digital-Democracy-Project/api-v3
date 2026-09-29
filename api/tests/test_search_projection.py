@@ -356,7 +356,7 @@ def test_tiny_statement_budget_still_drains(world, monkeypatch):
     assert refresh()["refreshed"] == 0
 
 
-def test_limit_bounds_a_call_and_more_signals_continuation(world):
+def test_limit_caps_each_statement_and_more_signals_continuation(world):
     for n in range(1, 6):
         add_bill(world, n)
     r = refresh(limit=2, time_budget_s=0)
@@ -461,6 +461,43 @@ def test_ordinary_delete_cascades(world):
     world.delete(b)
     world.commit()
     assert rows() == []
+
+
+def test_document_written_mid_refresh_is_not_lost(world, monkeypatch):
+    """A document committed between choosing documents and the upsert must leave the bill stale, not
+    have its newer updated_at recorded as if it had been indexed."""
+    b = add_bill(world, 1)
+    add_doc(world, b, "original wombat text")
+    real_pick = sp.pick_current_docs
+
+    def pick_then_write(doc_rows):
+        picks = real_pick(doc_rows)
+        other = TestingSessionLocal()
+        other.add(
+            BillVersionDocument(
+                bill_id=b.id,
+                version_note="Enrolled",
+                version_date="2026-02-01",
+                source_url="https://x/late",
+                media_type="text/html",
+                raw_text="late scorpion text",
+                is_error=False,
+                updated_at=_utc(days=5),
+            )
+        )
+        other.commit()
+        other.close()
+        return picks
+
+    monkeypatch.setattr(sp, "pick_current_docs", pick_then_write)
+    assert refresh()["refreshed"] == 1
+    assert search_ids("scorpion") == []  # this pass indexed the state it read
+    monkeypatch.setattr(sp, "pick_current_docs", real_pick)
+    assert (
+        refresh()["refreshed"] == 1
+    )  # ...and the late document is still pending, not skipped
+    assert search_ids("scorpion") == [b.id]
+    assert refresh()["refreshed"] == 0
 
 
 # --- pick_current_docs ----------------------------------------------------------------------------------

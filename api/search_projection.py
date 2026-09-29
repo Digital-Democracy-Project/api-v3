@@ -9,6 +9,12 @@ Created with plain SQL (CREATE ... IF NOT EXISTS) rather than an openstates-core
 migrations added to that fork risk number collisions with upstream's own (see ddp-open-states
 PRIMITIVES.md, "Why not a database table"), and api-v3 already owns DDP-only side tables by the
 same route (start-os-api.sh's bulk_dataexport ensure step).
+
+Freshness invariant (PLAN-enterprise-search.md 4.5.3): a row is stale when its bill's or any of its
+archived documents' `updated_at` is newer than the row's `source_updated_at`. Abstracts, subjects and
+the originating chamber are only ever changed by openstates-core's importer, which also saves the
+bill (advancing `Bill.updated_at`); any other writer must touch `opencivicdata_bill.updated_at`, or be
+followed by `python -m api.search_projection refresh --full --jurisdiction <x>`.
 """
 import time
 from typing import Dict, Optional
@@ -173,7 +179,8 @@ def ensure_schema(conn: Connection) -> None:
             r[0]
             for r in conn.execute(
                 text(
-                    "SELECT column_name FROM information_schema.columns WHERE table_name = 'ddp_bill_search'"
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'ddp_bill_search' AND table_schema = current_schema()"
                 )
             )
         }
@@ -183,14 +190,16 @@ def ensure_schema(conn: Connection) -> None:
             fts_type = conn.execute(
                 text(
                     "SELECT data_type FROM information_schema.columns "
-                    "WHERE table_name = 'ddp_bill_search' AND column_name = 'fts'"
+                    "WHERE table_name = 'ddp_bill_search' AND table_schema = current_schema() "
+                    "AND column_name = 'fts'"
                 )
             ).scalar()
             indexes = {
                 r[0]
                 for r in conn.execute(
                     text(
-                        "SELECT indexname FROM pg_indexes WHERE tablename = 'ddp_bill_search'"
+                        "SELECT indexname FROM pg_indexes "
+                        "WHERE tablename = 'ddp_bill_search' AND schemaname = current_schema()"
                     )
                 )
             }
@@ -296,6 +305,11 @@ def _refresh_one(
         ensure_schema(conn)
         while True:
             with conn.begin():
+                # One snapshot for choosing documents and for the upsert's own reads (including the
+                # source_updated_at watermark it stores): a document written between the two statements
+                # keeps a newer updated_at than the watermark, so the next pass rebuilds that bill
+                # instead of the projection recording a state it never indexed. Must be the first statement.
+                conn.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
                 conn.execute(
                     text(f"SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}")
                 )
