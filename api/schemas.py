@@ -308,6 +308,38 @@ class BillDocumentOrVersion(BaseModel):
     date: str = Field(..., example="2020-10-01")
     classification: str = Field(..., example="amendment")
     links: List[BillDocumentLink]
+    archived_document_id: Optional[int] = Field(
+        None,
+        example=62651,
+        description=(
+            "DDP: primary key of the ddp_bill_version_document row whose text and diff this "
+            "version carries (the PDF row when several formats were archived). Null when no "
+            "archived document matches. Single-bill detail queries with include=versions only."
+        ),
+    )
+    version_stage: Optional[str] = Field(
+        None,
+        example="amendment",
+        description=(
+            "DDP: version_ordering.note_stage()'s classification: introduced, amendment, "
+            "chamber_passage, final_passage, enacted, or unknown. Single-bill detail only."
+        ),
+    )
+    version_ordinal: Optional[int] = Field(
+        None,
+        example=2,
+        description=(
+            "DDP: 0-based position among this bill's classifiable versions in chronological "
+            "order (the order `versions` is returned in). Null for stage-unknown versions."
+        ),
+    )
+    archived_raw_text: Optional[str] = Field(
+        None,
+        description=(
+            "DDP: archived text of a stage-unknown version, which never gets link-level "
+            "raw_text (see postprocess_includes). Absent on classifiable versions."
+        ),
+    )
     diff_from_previous_version: Optional[str] = Field(
         None,
         example="--- a\n+++ b\n@@ -1 +1 @@\n-old text\n+new text",

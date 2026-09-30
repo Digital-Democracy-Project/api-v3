@@ -11,7 +11,28 @@ from .schemas import Bill
 from .pagination import Pagination
 from .auth import apikey_auth
 from .utils import jurisdiction_filter
-from .version_ordering import STAGE_UNKNOWN, note_stage, version_sort_key
+from .version_ordering import (
+    STAGE_AMENDMENT,
+    STAGE_CHAMBER_PASSAGE,
+    STAGE_ENACTED,
+    STAGE_FINAL_PASSAGE,
+    STAGE_INTRODUCED,
+    STAGE_UNKNOWN,
+    note_stage,
+    version_sort_key,
+)
+
+# DDP: stable, human-readable names for version_ordering's numeric stages, exposed as
+# `version_stage` so consumers (ddp-sync's knowledge-base embedding hook) carry the
+# classifier's own answer instead of re-implementing note_stage().
+STAGE_LABELS = {
+    STAGE_INTRODUCED: "introduced",
+    STAGE_AMENDMENT: "amendment",
+    STAGE_CHAMBER_PASSAGE: "chamber_passage",
+    STAGE_FINAL_PASSAGE: "final_passage",
+    STAGE_ENACTED: "enacted",
+    STAGE_UNKNOWN: "unknown",
+}
 
 
 class BillInclude(str, Enum):
@@ -55,17 +76,13 @@ class BillPagination(Pagination):
     max_per_page = 20
 
     @classmethod
-    def _attach_archived_document(cls, db, data, obj, version):
-        """Attach archived raw_text (OPEN-13) -- and, since PLAN-bill-document-provenance.md
-        Phase 8's bill_changelog work, diff_from_previous_version -- to `version`'s preferred
-        link/version object. BillVersionDocument isn't FK-linked to BillVersion (see its
-        docstring in db/models/bills.py), so this matches by content instead: bill + version
-        note/date + link url, same natural key openstates-core's archive_bill_versions() writes.
-
-        Returns the chosen BillVersionDocument row (so callers needing its raw_text for
-        something other than the response body, e.g. bill_changelog's old_bill_source, don't
-        have to re-query), or None if nothing archived matches.
-        """
+    def _archived_row_for(cls, db, data, version):
+        """The BillVersionDocument row archive_bill_versions() stored for `version`, or None.
+        BillVersionDocument isn't FK-linked to BillVersion (see its docstring in
+        db/models/bills.py), so this matches by content instead: bill + version note/date +
+        link url, same natural key openstates-core's archive_bill_versions() writes. When a
+        version has several archived formats, PDF wins, same priority archive_bill_versions()
+        uses for diff lineage."""
         if not version.links:
             return None
 
@@ -84,13 +101,26 @@ class BillPagination(Pagination):
         by_media_type = {row.media_type: row for row in archived if row.raw_text}
         if not by_media_type:
             return None
-        # Same PDF-over-HTML priority archive_bill_versions() uses for diff lineage.
-        chosen = by_media_type.get("application/pdf") or next(
-            iter(by_media_type.values())
-        )
+        return by_media_type.get("application/pdf") or next(iter(by_media_type.values()))
+
+    @classmethod
+    def _attach_archived_document(cls, db, data, obj, version):
+        """Attach archived raw_text (OPEN-13) -- and, since PLAN-bill-document-provenance.md
+        Phase 8's bill_changelog work, diff_from_previous_version -- to `version`'s preferred
+        link/version object. DDP: also `archived_document_id`, the chosen row's primary key
+        (ddp_bill_version_document.id), so a consumer can key a per-version document on it.
+
+        Returns the chosen BillVersionDocument row (so callers needing its raw_text for
+        something other than the response body, e.g. bill_changelog's old_bill_source, don't
+        have to re-query), or None if nothing archived matches.
+        """
+        chosen = cls._archived_row_for(db, data, version)
+        if chosen is None:
+            return None
 
         version_obj = obj.versions[list(data.versions).index(version)]
         version_obj.diff_from_previous_version = chosen.diff_from_previous_version
+        version_obj.archived_document_id = chosen.id
         for link_index, link_row in enumerate(version.links):
             if link_row.url == chosen.source_url:
                 version_obj.links[link_index].raw_text = chosen.raw_text
@@ -143,8 +173,28 @@ class BillPagination(Pagination):
         # field, same as before this change. Response size stays single-bill-detail-bound --
         # this widens the bound from "2 versions" to "this bill's own version count", it
         # doesn't remove the bound (the paginated /bills list is untouched, see below).
-        for version in ordered:
+        for ordinal, version in enumerate(ordered):
             cls._attach_archived_document(db, data, obj, version)
+            # DDP: the classifier's own stage and this version's position in the order it
+            # just produced, so consumers never re-derive either (classifiable versions only).
+            version_obj = obj.versions[list(data.versions).index(version)]
+            version_obj.version_stage = STAGE_LABELS[note_stage(version.note)[0]]
+            version_obj.version_ordinal = ordinal
+
+        # DDP: STAGE_UNKNOWN versions stay out of latest/previous and the diff lineage, and
+        # keep NO link-level raw_text or diff (LegBot's readers take versions[-1]/[-2] and
+        # must not start seeing them). They are still archived documents, though; expose
+        # their id and text in separate, additive fields so an embedding consumer can index
+        # them labelled "unknown".
+        for version in data.versions:
+            if note_stage(version.note)[0] != STAGE_UNKNOWN:
+                continue
+            version_obj = obj.versions[list(data.versions).index(version)]
+            version_obj.version_stage = STAGE_LABELS[STAGE_UNKNOWN]
+            row = cls._archived_row_for(db, data, version)
+            if row is not None:
+                version_obj.archived_document_id = row.id
+                version_obj.archived_raw_text = row.raw_text
 
         # SYNC-16: ddp-sync's local_openstates_client.py used to re-derive "latest"/
         # "previous" itself via the same naive (date, note) sort this fix just removed --
