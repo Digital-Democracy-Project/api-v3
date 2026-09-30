@@ -570,7 +570,7 @@ def test_coverage_validation(api):
     assert api.get("/ddp/search/coverage").status_code == 400
 
 
-# --- authorisation (PLAN §4.5.4 item 5) -----------------------------------------------------------
+# --- authorisation, proxy contract (PLAN §4.5.4 item 5) ---------------------------------------
 # ddp-api's /openstates/{path} catch-all decides read vs write scope from the HTTP method, then forwards
 # to this app with the internal key. What api-v3 can guarantee, and what these tests pin: every route
 # demands apikey_auth, only /refresh is a non-GET (so it is the only route ddp-api can map to write

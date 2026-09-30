@@ -426,7 +426,8 @@ def refresh(
     """Bring ddp_bill_search up to date. Bounded per call; a caller loops while `more` is true."""
     jid = _jurisdiction_ids([jurisdiction])[0] if jurisdiction else None
     with engine.connect() as conn:
-        # refresh_batch queries ddp_bill_search before checking it exists, so on a fresh instance the
-        # first POST must create it (OPEN-308 review carry-over). Idempotent and cheap once present.
+        # The all-jurisdictions form of refresh_batch reads ddp_bill_search before anything has ensured
+        # it exists, so on a fresh instance the first POST must create it (OPEN-308 review carry-over).
+        # Idempotent, so it is also safe to repeat on every call.
         search_projection.ensure_schema(conn)
         return search_projection.refresh_batch(conn, jurisdiction_id=jid, limit=limit)
