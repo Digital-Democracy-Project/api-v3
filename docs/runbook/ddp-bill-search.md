@@ -21,8 +21,13 @@ upstream reads or writes it, so dropping it loses nothing that cannot be rebuilt
 ## 2. Two instances
 
 The RDS-backed `api-v3` (broker host, `deploy/docker-compose.rds.yml`) and the Mac Studio's (`:8002`,
-`deploy/docker-compose.ddp.yml`) each build their own table from their own database. Search must be
-served from the RDS-backed one: the Mac subscriber does not replicate abstracts or people (plan 4.5.6).
+`deploy/docker-compose.ddp.yml`) each build their own table from their own database. Either can serve
+search: since OPEN-312 the Mac replica's publication carries 47 tables, including abstracts and people,
+so the earlier statement that the Mac subscriber lacks them (plan 4.5.6, written when the publication
+carried 7 tables) no longer holds. The RDS-backed one remains the default because it is authoritative
+(the replica trails by seconds and lost its connection for about 3h50m on 2026-09-27) and because
+building on the Mac writes a table into the database LegBot reads. Known gap on both: the Mac replica has
+0 NC people (the Mac's scrape database has 508); check RDS before relying on NC legislator search.
 Three things must name the SAME instance, or search silently reads a stale or incomplete table:
 
 - where `ensure` and the first build were run,
@@ -152,7 +157,7 @@ Nothing below has been run. Record each result on OPEN-310. Stop conditions are 
        inside the request timeout of the path that ddp-sync uses (record that timeout; the total build time
        is informational, because the first build is a loop of bounded calls).
 4. [ ] `GET /ddp/search/coverage` for the 8 enrolled jurisdictions shows `projected == bills` (done
-       condition) and `with_abstract` is nonzero for FL and VA, `people` nonzero for all. Record
+       condition) and `with_abstract` is nonzero for FL and VA, `people` nonzero for all except possibly NC (see section 2). Record
        `pg_total_relation_size('ddp_bill_search')` and the index sizes from the size check in section 5.
 5. [ ] Record which instance serves production and fill in section 4; assert the three names match.
 6. [ ] Authorisation through the real `ddp-api`: an unauthenticated `POST /openstates/ddp/search/refresh` and
