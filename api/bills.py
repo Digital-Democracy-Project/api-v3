@@ -161,6 +161,21 @@ class BillPagination(Pagination):
         classifiable = [
             v for v in data.versions if note_stage(v.note)[0] != STAGE_UNKNOWN
         ]
+        # DDP: STAGE_UNKNOWN versions stay out of latest/previous and the diff lineage, and
+        # keep NO link-level raw_text or diff (LegBot's readers take versions[-1]/[-2] and
+        # must not start seeing them). They are still archived documents, though; expose
+        # their id and text in separate, additive fields so an embedding consumer can index
+        # them labelled "unknown".
+        for version in data.versions:
+            if note_stage(version.note)[0] != STAGE_UNKNOWN:
+                continue
+            version_obj = obj.versions[list(data.versions).index(version)]
+            version_obj.version_stage = STAGE_LABELS[STAGE_UNKNOWN]
+            row = cls._archived_row_for(db, data, version)
+            if row is not None:
+                version_obj.archived_document_id = row.id
+                version_obj.archived_raw_text = row.raw_text
+
         if not classifiable:
             return
         ordered = sorted(classifiable, key=lambda v: version_sort_key(v.note, v.date))
@@ -182,21 +197,6 @@ class BillPagination(Pagination):
             version_obj = obj.versions[list(data.versions).index(version)]
             version_obj.version_stage = STAGE_LABELS[note_stage(version.note)[0]]
             version_obj.version_ordinal = ordinal
-
-        # DDP: STAGE_UNKNOWN versions stay out of latest/previous and the diff lineage, and
-        # keep NO link-level raw_text or diff (LegBot's readers take versions[-1]/[-2] and
-        # must not start seeing them). They are still archived documents, though; expose
-        # their id and text in separate, additive fields so an embedding consumer can index
-        # them labelled "unknown".
-        for version in data.versions:
-            if note_stage(version.note)[0] != STAGE_UNKNOWN:
-                continue
-            version_obj = obj.versions[list(data.versions).index(version)]
-            version_obj.version_stage = STAGE_LABELS[STAGE_UNKNOWN]
-            row = cls._archived_row_for(db, data, version)
-            if row is not None:
-                version_obj.archived_document_id = row.id
-                version_obj.archived_raw_text = row.raw_text
 
         # SYNC-16: ddp-sync's local_openstates_client.py used to re-derive "latest"/
         # "previous" itself via the same naive (date, note) sort this fix just removed --

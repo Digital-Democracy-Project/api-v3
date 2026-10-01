@@ -308,22 +308,31 @@ def test_unknown_stage_prefers_pdf_text(client):
     assert all("raw_text" not in link for link in unknown["links"])
 
 
-def test_only_unknown_versions_leave_new_fields_off_and_do_not_error(client):
-    """With no classifiable version postprocess_includes returns early, as before: the
-    response is unchanged (no new fields), not an error."""
+def test_bill_with_only_unknown_versions_still_gets_unknown_fields(client):
+    """Review fix: the unknown-stage enrichment must not depend on a classifiable version
+    existing. Link-level raw_text and diff stay absent."""
     with _temp_bill(
         "HB 9205",
         [
             (
                 "Strange Thing",
                 [("https://example.com/t5.pdf", "application/pdf", "text")],
-            )
+            ),
+            ("Odd Thing", [("https://example.com/t5b.pdf", "application/pdf", None)]),
         ],
     ) as bill_id:
         versions = _get(client, bill_id)
-    assert len(versions) == 1
-    for field in NEW_FIELDS:
-        assert field not in versions[0]
+        expected_id = _doc_id("HB 9205", "https://example.com/t5.pdf")
+    by_note = {v["note"]: v for v in versions}
+    strange, odd = by_note["Strange Thing"], by_note["Odd Thing"]
+    assert strange["version_stage"] == "unknown"
+    assert strange["archived_document_id"] == expected_id
+    assert strange["archived_raw_text"] == "text"
+    assert "raw_text" not in strange["links"][0]
+    assert "version_ordinal" not in strange
+    assert odd["version_stage"] == "unknown"
+    assert "archived_document_id" not in odd
+    assert "archived_raw_text" not in odd
 
 
 def test_list_endpoint_never_exposes_new_fields(client):
