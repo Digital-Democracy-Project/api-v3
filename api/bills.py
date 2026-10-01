@@ -101,7 +101,9 @@ class BillPagination(Pagination):
         by_media_type = {row.media_type: row for row in archived if row.raw_text}
         if not by_media_type:
             return None
-        return by_media_type.get("application/pdf") or next(iter(by_media_type.values()))
+        return by_media_type.get("application/pdf") or next(
+            iter(by_media_type.values())
+        )
 
     @classmethod
     def _attach_archived_document(cls, db, data, obj, version):
@@ -207,7 +209,9 @@ class BillPagination(Pagination):
         # array order only, never which/how many versions are returned.
         data_versions = list(data.versions)
         unknown_stage_indexes = [
-            i for i, v in enumerate(data_versions) if note_stage(v.note)[0] == STAGE_UNKNOWN
+            i
+            for i, v in enumerate(data_versions)
+            if note_stage(v.note)[0] == STAGE_UNKNOWN
         ]
         ordered_indexes = [data_versions.index(v) for v in ordered]
         obj.versions = [obj.versions[i] for i in unknown_stage_indexes] + [
