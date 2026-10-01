@@ -10,7 +10,7 @@ upstream reads or writes it, so dropping it loses nothing that cannot be rebuilt
 
 ## 1. Order of operations (merge and deploy)
 
-1. Merge OPEN-309 (routes) before OPEN-310 (this runbook; the PR is stacked on it).
+1. OPEN-308 (table and refresher) and OPEN-309 (routes) are merged; this runbook follows them.
 2. Rebuild and redeploy the `api` image on the instance that serves production (section 4), from a revision
    that contains the merged OPEN-308 AND OPEN-309 code. Check on the running container:
    `docker exec ddp-openstates-api-1 python -c "import api.ddp_search, api.search_projection"` must exit 0.
@@ -69,11 +69,21 @@ smoke tests after it never run. Add it in a `ddp-open-states` PR, merged only AF
 has been rebuilt and that import check passes. The RDS-backed instance has no boot hook (plan 4.5.4 step 3):
 run the one-liner above by hand after each image rebuild that changes the schema.
 
-## 4. Which instance serves production (record it here when known)
+## 4. Which instance serves production (recorded 2026-09-30)
 
-Not resolved in the repos (plan 4.5.7). Record: the host and container that answers
-`OPENSTATES_SERVICE_URL` for `ddp-api`: ______; `local_openstates_api_base` in `ddp-sync`: ______;
-`DDP_OPENSTATES_API_ROOT` for the broker: ______. All three must match the instance you ran `ensure` on.
+**The RDS-backed api-v3 on the broker host** (`ddp-openstates-api-1`, `docker-compose.rds.yml`, port 8002).
+`ddp_bill_search` exists only on that instance. Evidence, all read-only:
+
+- `coverage` requested through ddp-api returns exactly what that instance returns (FL: 7,685 bills, 7,685
+  projected, 539 people), and no other instance has the table.
+- The broker's `DDP_OPENSTATES_API_ROOT` and ddp-sync's `RDS_OPENSTATES_API_BASE` on that host both name it.
+- **Not read directly:** ddp-api's `OPENSTATES_SERVICE_URL` (inferred from the first bullet).
+- The Mac's ddp-sync `local_openstates_api_base` points at the Mac's own api-v3, which has no
+  `ddp_bill_search` and is unrelated to this path. **Whatever calls `POST /ddp/search/refresh` later (SYNC-87)
+  must target the RDS-backed instance, not that setting.**
+
+Internal addresses are deliberately not written here (this repository is public); they are in the private
+ops notes.
 
 ## 5. First build, refresh, repair
 
@@ -105,6 +115,8 @@ docker exec ddp-openstates-api-1 python -m api.search_projection refresh --juris
   with the `ddp-sync` hook disabled, then run section 3, section 5's first build, and the coverage check.
 
 ## 6. Measurements on the local test database (2026-09-30)
+
+(The production figures differ, notably the first build: see section 7.)
 
 Setup: local Docker Postgres 16 (`openstates` database, an older copy of production, 75,805 bills in 10
 jurisdictions with data to 2026-09-01; the 8 enrolled ones are US, FL, MI, AZ, VA, WA, UT, NC, and MA and AL
@@ -142,35 +154,26 @@ Importer freshness (plan 4.5.3), read from code, not yet observed live: abstract
 then calls `obj.save()`, and `Bill.updated_at` is `auto_now=True`. So an abstract change advances
 `Bill.updated_at`, which is what marks the projection row stale. The live confirmation is in section 7.
 
-## 7. Production checklist for Ramon (NOT done by OPEN-310's PR)
+## 7. Production rollout and results (2026-09-30, RDS-backed instance)
 
-Nothing below has been run. Record each result on OPEN-310. Stop conditions are from plan 10.1.
+Run on 2026-09-30 by the production agent and the user. Times UTC. Stop conditions are from plan 10.1.
 
-1. [ ] Rebuild and redeploy the `api` image on the serving instance so it contains `api/ddp_search.py`.
-2. [ ] `ensure` on the RDS-backed instance (section 3). Expect `ddp_bill_search present`. `pg_trgm` is a
-       trusted extension and DDP controls this instance (Ramon, 2026-09-30), so a permission failure would
-       be a surprise; record that it worked. (The stop condition for `pg_trgm` still applies to the BROKER
-       database's migration 0064 under BROKER-163, which is a different host and role.)
-3. [ ] First build on that instance (section 5), timed. Record seconds and row count. Expect roughly the
-       local figure (about 2.5 minutes) on similar hardware; RDS network latency will change it. Stop if any
-       single `POST /refresh` call, or any single refresh statement with full-length documents, cannot finish
-       inside the request timeout of the path that ddp-sync uses (record that timeout; the total build time
-       is informational, because the first build is a loop of bounded calls).
-4. [ ] `GET /ddp/search/coverage` for the 8 enrolled jurisdictions shows `projected == bills` (done
-       condition) and `with_abstract` is nonzero for FL and VA, `people` nonzero for all except possibly NC (see section 2). Record
-       `pg_total_relation_size('ddp_bill_search')` and the index sizes from the size check in section 5.
-5. [ ] Record which instance serves production and fill in section 4; assert the three names match.
-6. [ ] Authorisation through the real `ddp-api`: an unauthenticated `POST /openstates/ddp/search/refresh` and
-       one with a READ-scope token are both rejected (401/403); `GET /openstates/ddp/search` with the read
-       token is accepted; the key in `DDP_OPENSTATES_BEARER_TOKEN` is read-scope only. Also confirm
-       `api-v3` itself is reachable only from trusted callers (`ddp-api`, `ddp-sync`), because `api-v3`
-       keys have no scopes and any valid key can call its `POST /refresh` directly.
-7. [ ] `ddp-api` hop latency: from the broker host, time `GET <OPENSTATES_SERVICE_URL>/ddp/search/suggest`
-       (via `ddp-api`) for 50 to 100 requests over a mix of judged-set queries (BROKER-162: exact numbers,
-       titles, misspellings, short prefixes, names), and record p50 and p95. Bar: full-path `suggest` p95 at or
-       under 150 ms, measured through `ddp-api` (not directly against `api-v3`). Above it after `DDPOpenStates` direct mode: stop and revisit plan 4.5.2.
-8. [ ] Importer really advances `Bill.updated_at` on an abstract change (section 6 explains why it should):
-       on the Mac dev database, change one bill's abstract through a scrape/import, confirm
-       `refresh --dry-run` reports `would_refresh=1`. If not, the stale predicate needs another signal.
-9. [ ] Only after 1 to 8 pass: add the `start-os-api.sh` block (section 3) in a `ddp-open-states` PR, then
-       enable the `ddp-sync` hook (plan 10.1 step 3).
+| # | Step | Result |
+|---|---|---|
+| 1 | Rebuild and redeploy `api` from `main` | **Done** about 22:51. api-v3 `ce1447c`, image built on the host (x86_64). Rollback tag `ddp-openstates-api:pre-open308` kept. Redis and the broker containers were not restarted. |
+| 2 | `ensure` | **Done.** `pg_trgm` 1.6 installed, table plus 5 indexes (4 plus the primary key). Publication still `puballtables = false`, 47 tables, `ddp_bill_search` not in it; replica still streaming. |
+| 3 | First build, timed | **Done.** 76,909 rows (74,777 with text) in **1,576 s (about 26 min)**, about 10 times the local figure of 148 s (attributed to network latency to RDS; not confirmed with RDS metrics). Table 502 MB (fts index 76 MB, title index 19 MB). Replica lag stayed between 0.10 and 0.44 s the whole time. A second run changed 0 rows. |
+| 4 | Coverage: `projected == bills` | **Done, met for all 8.** US 38,605; FL 7,685; VA 4,382; MI 4,107; WA 3,411; NC 2,338; AZ 2,190; UT 1,021. `with_abstract` nonzero for FL (7,685) and VA (4,382) only. `people` nonzero except **NC = 0** (see below). |
+| 5 | Record the serving instance | **Done by inference**, section 4. |
+| 6 | Authorisation through the real ddp-api | **Pass.** `POST .../refresh` with no token: 401. With the read-scope token: 403 "Write access required", and api-v3's log shows it never reached api-v3. `GET` search with the read token: 200. Bad token: 403 (not 401; rejected either way). `limit=101`: 422. api-v3 itself: no security group opens port 8002 and the last 24 hours of logs show only localhost, the Docker gateway and the Mac over WireGuard. **Not checked:** host firewall, NACLs, other WireGuard peers. api-v3 keys have no scopes, so any peer holding a valid key could call its refresh directly. |
+| 7 | ddp-api hop latency (bar: `suggest` p95 at or under 150 ms) | **Fail, override recorded.** All 65 judged-set queries, two passes, one sequential client: through ddp-api p95 **348 ms** warm (764 ms cold); direct to api-v3 197 ms warm; the hop adds about 120 ms at the median. Slowest were `S 1` and `school lun`, the known slow shapes. Caveats: the judged set has no jurisdiction field, so every query searched all 8 states (worst case), and the numbers include the network to RDS. **The user told the production agent to accept this and move on, which overrides the stop condition rather than satisfying it. Plan 4.5.2 has not been revisited and Ramon has not confirmed.** |
+| 8 | Importer advances `Bill.updated_at` on an abstract change | **Not done.** Needs a non-production database. Read from code only (section 6). |
+| 9 | `start-os-api.sh` ensure block; refresh hook | **Not done.** The boot block waits until the Mac `api` image is rebuilt and the import check passes there. **Nothing refreshes `ddp_bill_search` yet:** no caller exists until SYNC-87 (or a scheduled call) is built, so new or changed bills will not appear until someone runs `refresh`. A no-op sweep costs about 26 s, so per-jurisdiction refreshes are cheaper. |
+
+**NC people gap.** RDS has 0 people for North Carolina (4,088 in total, the same as the Mac replica). The Mac's
+own scrape database has 508 NC people that were never loaded into RDS, so legislator-name search finds nothing
+for NC. Bill search for NC is unaffected. Loading them into RDS is what would fix it; that is not part of this
+deploy.
+
+**Not measured on RDS:** the worst-case refresh statement with full-length documents, and RDS free storage
+(the build completed, so there was enough; the margin is unknown).
