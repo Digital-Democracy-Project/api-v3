@@ -1,7 +1,9 @@
 """OPEN-311: archived_document_id, version_stage, version_ordinal and archived_raw_text on
 bill versions (single-bill detail with include=versions only). The fixture bills HB 9101-9106
 come from fixtures.create_test_bills_with_archived_versions; bills that need shapes those
-don't cover are created per-test by _temp_bill and removed again, so no other test sees them."""
+don't cover are created per-test by _temp_bill and removed again, so no other test sees them.
+"""
+
 import datetime
 import uuid
 from contextlib import contextmanager
@@ -198,6 +200,104 @@ def test_pdf_row_preferred_over_html_for_archived_document_id(client):
     assert versions[0]["archived_document_id"] == pdf_id
     assert versions[0]["version_stage"] == "introduced"
     assert versions[0]["version_ordinal"] == 0
+
+
+def test_xml_row_preferred_over_pdf_and_html(client):
+    """OPEN-317: XML text wins regardless of which row was archived first or last, and the
+    link-level raw_text follows the chosen row."""
+    with _temp_bill(
+        "HB 9206",
+        [
+            (
+                "Introduced",
+                [
+                    ("https://example.com/t6.xml", "text/xml", "xml text"),
+                    ("https://example.com/t6.pdf", "application/pdf", "pdf text"),
+                    ("https://example.com/t6.html", "text/html", "html text"),
+                ],
+            ),
+            (
+                "Enrolled",
+                [
+                    ("https://example.com/t6e.pdf", "application/pdf", "pdf enr"),
+                    ("https://example.com/t6e.xml", "text/xml", "xml enr"),
+                ],
+            ),
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+        introduced_id = _doc_id("HB 9206", "https://example.com/t6.xml")
+        enrolled_id = _doc_id("HB 9206", "https://example.com/t6e.xml")
+    introduced, enrolled = versions
+    assert introduced["archived_document_id"] == introduced_id
+    assert enrolled["archived_document_id"] == enrolled_id
+    raw = {
+        link["url"]: link.get("raw_text")
+        for v in versions
+        for link in v["links"]
+        if link.get("raw_text")
+    }
+    assert raw == {
+        "https://example.com/t6.xml": "xml text",
+        "https://example.com/t6e.xml": "xml enr",
+    }
+
+
+def test_same_media_type_rows_resolve_to_the_lowest_id(client):
+    """OPEN-317: two archived PDFs for one version -- the earlier row wins every time, not
+    whichever the database happens to return last."""
+    with _temp_bill(
+        "HB 9207",
+        [
+            (
+                "Introduced",
+                [
+                    ("https://example.com/t7-a.pdf", "application/pdf", "first"),
+                    ("https://example.com/t7-b.pdf", "application/pdf", "second"),
+                ],
+            )
+        ],
+    ) as bill_id:
+        first = _get(client, bill_id)[0]["archived_document_id"]
+        again = _get(client, bill_id)[0]["archived_document_id"]
+        lowest = min(
+            _doc_id("HB 9207", "https://example.com/t7-a.pdf"),
+            _doc_id("HB 9207", "https://example.com/t7-b.pdf"),
+        )
+    assert first == again == lowest
+
+
+def test_diff_follows_the_chosen_xml_row(client):
+    with _temp_bill(
+        "HB 9208",
+        [
+            (
+                "Introduced",
+                [("https://example.com/t8-int.xml", "text/xml", "intro text")],
+            ),
+            (
+                "Enrolled",
+                [
+                    ("https://example.com/t8-enr.pdf", "application/pdf", "enr pdf"),
+                    ("https://example.com/t8-enr.xml", "text/xml", "enr xml"),
+                ],
+            ),
+        ],
+    ) as bill_id:
+        db = TestingSessionLocal()
+        try:
+            rows = (
+                db.query(BillVersionDocument)
+                .filter(BillVersionDocument.bill_id == bill_id)
+                .all()
+            )
+            for row in rows:
+                row.diff_from_previous_version = f"diff for {row.media_type}"
+            db.commit()
+        finally:
+            db.close()
+        enrolled = _get(client, bill_id)[1]
+    assert enrolled["diff_from_previous_version"] == "diff for text/xml"
 
 
 def test_html_only_version_uses_the_html_row(client):
