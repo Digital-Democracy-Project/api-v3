@@ -317,6 +317,17 @@ class BillDocumentOrVersion(BaseModel):
             "archived document matches. Single-bill detail queries with include=versions only."
         ),
     )
+    archived_updated_at: Optional[datetime.datetime] = Field(
+        None,
+        example="2026-08-14T09:21:07.123456+00:00",
+        description=(
+            "DDP: updated_at of that same ddp_bill_version_document row (the one "
+            "`archived_document_id` names), the column /bills?document_updated_since= filters on. "
+            "It is the per-document 'this document changed' signal, so a consumer can record it and "
+            "later compare it with /ddp/embedding/ledger. Null when no archived document matches. "
+            "Single-bill detail queries with include=versions only."
+        ),
+    )
     version_stage: Optional[str] = Field(
         None,
         example="amendment",

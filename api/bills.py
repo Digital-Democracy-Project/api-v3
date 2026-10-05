@@ -135,6 +135,7 @@ class BillPagination(Pagination):
         version_obj = obj.versions[list(data.versions).index(version)]
         version_obj.diff_from_previous_version = chosen.diff_from_previous_version
         version_obj.archived_document_id = chosen.id
+        version_obj.archived_updated_at = chosen.updated_at
         for link_index, link_row in enumerate(version.links):
             if link_row.url == chosen.source_url:
                 version_obj.links[link_index].raw_text = chosen.raw_text
@@ -186,6 +187,7 @@ class BillPagination(Pagination):
             row = cls._archived_row_for(db, data, version)
             if row is not None:
                 version_obj.archived_document_id = row.id
+                version_obj.archived_updated_at = row.updated_at
                 version_obj.archived_raw_text = row.raw_text
 
         if not classifiable:
