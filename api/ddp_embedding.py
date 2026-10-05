@@ -52,9 +52,13 @@ class LedgerPage(BaseModel):
     next_after: Optional[str] = Field(
         None,
         description=(
-            "Pass as `after` to read the next page; null on the last page. It is a position in "
-            "the jurisdiction's bills, not a count of results: a page can return fewer bills "
-            "than `limit` (bills with no archived document are left out) and still have more."
+            "Pass as `after` to read the next page; null exactly when there are no more bills "
+            "(one extra bill is read to know, so a jurisdiction whose bill count is a multiple of "
+            "`limit` does not need an empty last request). It is a position in the jurisdiction's "
+            "bills, not a count of results: a page can return fewer bills than `limit`, even none, "
+            "because bills with no archived document are left out, and still have more. `after` is "
+            "an opaque bill id: any string is accepted and simply sorts. The scan is not a "
+            "snapshot: a bill inserted behind the cursor while it runs is seen by the next full scan."
         ),
     )
 
@@ -93,7 +97,11 @@ def ledger(
     )
     if after:
         query = query.filter(models.Bill.id > after)
-    bills = query.limit(limit).all()
+    bills = query.limit(
+        limit + 1
+    ).all()  # one extra tells us whether this is the last page
+    more = len(bills) > limit
+    bills = bills[:limit]
 
     results = []
     for bill in bills:
@@ -117,6 +125,4 @@ def ledger(
                     ),
                 )
             )
-    return LedgerPage(
-        results=results, next_after=bills[-1].id if len(bills) == limit else None
-    )
+    return LedgerPage(results=results, next_after=bills[-1].id if more else None)

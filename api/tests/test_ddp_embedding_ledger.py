@@ -173,3 +173,152 @@ def test_the_ledger_route_requires_the_api_key():
 
     route = next(r for r in app.routes if getattr(r, "path", "") == LEDGER)
     assert any(d.call is apikey_auth for d in route.dependant.dependencies)
+
+
+def _bill_count(jurisdiction="oh"):
+    from openstates.metadata import lookup
+
+    from api.db.models import Bill, LegislativeSession
+
+    db = TestingSessionLocal()
+    try:
+        return (
+            db.query(Bill)
+            .join(
+                LegislativeSession, Bill.legislative_session_id == LegislativeSession.id
+            )
+            .filter(
+                LegislativeSession.jurisdiction_id
+                == lookup(abbr=jurisdiction).jurisdiction_id
+            )
+            .count()
+        )
+    finally:
+        db.close()
+
+
+def test_the_last_page_has_a_null_cursor_even_when_the_bill_count_is_a_multiple_of_the_limit(
+    client,
+):
+    total = _bill_count()
+    assert 1 < total <= 500
+    exact = client.get(LEDGER, params={"jurisdiction": "oh", "limit": total}).json()
+    assert (
+        exact["next_after"] is None
+    )  # every bill fit in one page: no empty last request needed
+    first = client.get(LEDGER, params={"jurisdiction": "oh", "limit": total - 1}).json()
+    assert first["next_after"] is not None  # one bill is left, so there is a next page
+    last = client.get(
+        LEDGER,
+        params={"jurisdiction": "oh", "limit": total - 1, "after": first["next_after"]},
+    ).json()
+    assert last["next_after"] is None
+
+
+def test_a_page_of_only_bills_without_archived_documents_is_empty_but_not_the_end(
+    client,
+):
+    pages, after = [], None
+    while True:
+        params = {"jurisdiction": "oh", "limit": 1}
+        if after:
+            params["after"] = after
+        page = client.get(LEDGER, params=params).json()
+        pages.append(page)
+        after = page["next_after"]
+        if not after:
+            break
+    assert any(
+        not p["results"] and p["next_after"] for p in pages
+    )  # a docless bill: short page, more to come
+
+
+def test_after_is_an_opaque_position_and_a_malformed_one_is_not_an_error(client):
+    for odd in ("not-an-id", "%%%", "ocd-bill/", "zzzz" * 40):
+        assert (
+            client.get(LEDGER, params={"jurisdiction": "oh", "after": odd}).status_code
+            == 200
+        )
+
+
+def test_a_stage_unknown_version_with_several_eligible_rows_matches_the_detail(client):
+    shape = [
+        (
+            "Mystery note",  # no known stage: the detail's separate stage-unknown branch
+            [
+                ("https://x/m.pdf", "application/pdf", "pdf"),
+                ("https://x/m.xml", "text/xml", "xml"),
+                ("https://x/m2.xml", "text/xml", "xml again"),
+            ],
+        )
+    ]
+    with _temp_bill("HB 9305", shape) as bill_id:
+        _stamp(bill_id)
+        bare = bill_id.removeprefix("ocd-bill/")
+        detail = _detail_docs(client, bare)
+        ledger = {
+            d["archived_document_id"]: d["updated_at"]
+            for d in _ledger_all(client)[bare]["documents"]
+        }
+        assert set(ledger) == set(detail) and len(ledger) == 1
+        (doc_id,) = detail
+        assert ledger[doc_id] == detail[doc_id]["archived_updated_at"]
+        db = TestingSessionLocal()
+        try:
+            chosen = db.query(BillVersionDocument).get(doc_id)
+            assert (
+                chosen.media_type == "text/xml"
+                and chosen.source_url == "https://x/m.xml"
+            )  # XML, then lowest id
+        finally:
+            db.close()
+
+
+def test_two_versions_that_resolve_to_one_row_are_listed_once_and_the_detail_names_it_twice(
+    client,
+):
+    shape = [
+        ("Introduced", [("https://x/s.xml", "text/xml", "same")]),
+        ("Introduced", [("https://x/s.xml", "text/xml", "same")]),
+    ]
+    with _temp_bill("HB 9306", shape) as bill_id:
+        _stamp(bill_id)
+        bare = bill_id.removeprefix("ocd-bill/")
+        versions = client.get(f"/bills/{bill_id}?include=versions").json()["versions"]
+        ids = [v["archived_document_id"] for v in versions]
+        assert (
+            len(ids) == 2 and ids[0] == ids[1]
+        )  # both versions resolve to the lowest-id row
+        docs = _ledger_all(client)[bare]["documents"]
+        assert [d["archived_document_id"] for d in docs] == [ids[0]]  # listed once
+
+
+def test_a_row_with_no_updated_at_is_null_in_the_ledger_and_absent_from_the_detail(
+    client,
+):
+    with _temp_bill(
+        "HB 9307", [("Introduced", [("https://x/n.xml", "text/xml", "t")])]
+    ) as bill_id:
+        bare = bill_id.removeprefix(
+            "ocd-bill/"
+        )  # not stamped: the fixtures leave updated_at unset
+        (doc,) = _ledger_all(client)[bare]["documents"]
+        (version,) = client.get(f"/bills/{bill_id}?include=versions").json()["versions"]
+    assert doc["updated_at"] is None and "archived_updated_at" not in version
+    assert version["archived_document_id"] == doc["archived_document_id"]
+
+
+def test_without_the_conftest_override_the_ledger_refuses_a_request_with_no_key_like_the_search_route():
+    from fastapi.testclient import TestClient
+
+    from api.auth import apikey_auth
+    from api.main import app
+
+    override = app.dependency_overrides.pop(apikey_auth)
+    try:
+        bare = TestClient(app)
+        ledger = bare.get(LEDGER, params={"jurisdiction": "oh"})
+        search = bare.get("/ddp/search", params={"q": "hb", "jurisdiction": "oh"})
+    finally:
+        app.dependency_overrides[apikey_auth] = override
+    assert ledger.status_code == search.status_code == 403
