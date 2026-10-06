@@ -183,6 +183,50 @@ PEOPLE_SQL = text(
 """
 )
 
+# OPEN-326: a swapped pair of letters destroys most of a short surname's trigrams, so "Smtih" scores 0.33 against
+# "Adam Smith" and falls under the 0.5 threshold above (measured 2026-10-05 on the 4,651 current legislators:
+# a lowered threshold finds it only at 0.3, where ordinary words such as "budget" and "housing" start returning
+# legislators, 5 of 33 non-name queries at 0.5 against 27 of 33 at 0.3). So the transposed spellings of a one-word
+# query are also matched EXACTLY against surnames: no noise is possible, because a hit must be a real surname
+# that is the typed word with two adjacent letters swapped. Aliases count, as in PEOPLE_SQL.
+PEOPLE_TRANSPOSED_SQL = text(
+    r"""
+    WITH names AS (
+        SELECT p.id AS person_id, p.name AS matched_name FROM opencivicdata_person p
+        UNION ALL
+        SELECT n.person_id, n.name FROM opencivicdata_personname n
+    )
+    SELECT p.id, p.name, p.primary_party, p.current_jurisdiction_id,
+           p."current_role" ->> 'title'              AS role_title,
+           p."current_role" ->> 'org_classification' AS chamber,
+           p."current_role" ->> 'district'           AS district,
+           CAST(:score AS float)                     AS score
+    FROM names JOIN opencivicdata_person p ON p.id = names.person_id
+    WHERE p.current_jurisdiction_id = ANY(:jids)
+      AND substring(
+            regexp_replace(lower(names.matched_name), ',?\s+(jr|sr|ii|iii|iv|md)\.?\s*$', '')
+            from '[^\s]+$'
+          ) = ANY(:variants)
+    GROUP BY p.id, p.name, p.primary_party, p.current_jurisdiction_id, p."current_role"
+    ORDER BY p.name
+    LIMIT :limit
+"""
+)
+
+_ONE_WORD = re.compile(r"[^\W\d_]{4,30}")  # letters only (accents allowed): one word, 4 to 30 letters
+
+
+def _transposed_spellings(q: str) -> List[str]:
+    """The lower-cased query with each pair of adjacent DIFFERENT letters swapped, one spelling per swap; empty
+    unless the query is a single alphabetic word of 4 to 30 letters (a phrase, a number or a hyphenated name
+    is left to the trigram match alone)."""
+    word = q.strip().lower()
+    if not _ONE_WORD.fullmatch(word):
+        return []
+    return sorted(
+        {word[:i] + word[i + 1] + word[i] + word[i + 2 :] for i in range(len(word) - 1) if word[i] != word[i + 1]}
+    )
+
 
 def _abbr(jurisdiction_id: str) -> str:
     return lookup(jurisdiction_id=jurisdiction_id).abbr.upper()
@@ -234,6 +278,22 @@ def _person_hit(row) -> dict:
         "district": row.district,
         "score": row.score,
     }
+
+
+def _people_hits(db: Session, params: dict) -> List[dict]:
+    """People for the query: the trigram matches, then (OPEN-326) anyone whose surname is the typed word with two
+    adjacent letters swapped. A transposition hit is scored at exactly the threshold, the least a hit can score,
+    so it sits below any direct match; a person found both ways appears once, with the trigram hit."""
+    hits = [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
+    variants = _transposed_spellings(params["q"])
+    if variants:
+        seen = {h["id"] for h in hits}
+        rows = db.execute(
+            PEOPLE_TRANSPOSED_SQL,
+            {**params, "variants": variants, "score": float(WORD_SIMILARITY_THRESHOLD)},
+        )
+        hits += [_person_hit(r) for r in rows if r.id not in seen]
+    return hits
 
 
 def _rank(hit: dict):
@@ -302,7 +362,7 @@ def search(
         if "bill" in wanted:
             names += [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
         if "person" in wanted:
-            names += [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
+            names += _people_hits(db, params)
         names.sort(key=_rank)
     return {
         "q": q,
@@ -334,7 +394,7 @@ def suggest(
         results += [_bill_hit(r) for r in db.execute(PREFIX_SQL, params)]
     if len(q) >= 3:
         fuzzy = [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
-        fuzzy += [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
+        fuzzy += _people_hits(db, params)
         fuzzy.sort(key=_rank)
         seen = {h["id"] for h in results}
         results += [h for h in fuzzy if h["id"] not in seen]
