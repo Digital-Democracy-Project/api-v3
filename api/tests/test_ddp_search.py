@@ -292,6 +292,78 @@ def test_search_exact_scoped_and_ambiguous_across_jurisdictions(built, api):
     assert [h["jurisdiction"] for h in only["exact"]] == ["WY"]
 
 
+# Real bill-number shapes the exact tier used to miss (OPEN-316), surveyed 2026-10-05 over every
+# projected bill: FL special sessions end in a letter (HB 1C, HB 5403E), the US has 5-7 letter prefixes
+# (HJRES, HCONRES), MI numbers some resolutions by letter alone (HJR A), and people type dots (H.R. 1).
+_SHAPES = [
+    # (stored identifier, queries that must find exactly it)
+    ("HB 1C", ["HB 1C", "HB1C", "hb 1c", "HB-1C"]),
+    ("HB 5403E", ["HB 5403E", "hb5403e"]),
+    ("HCONRES 1", ["HCONRES 1", "hconres1"]),
+    ("SJRES 9", ["SJRES 9", "SJRES9"]),
+    ("HJR A", ["HJR A", "hjr a", "HJR-A"]),
+    ("HJR AA", ["HJR AA"]),
+    ("HR 7", ["HR 7", "H.R. 7", "h.r.7", "H. R. 7"]),
+    ("HJRES 1", ["HJRES 1", "H.J. Res. 1", "H.J.Res.1"]),
+]
+
+
+@pytest.fixture
+def shapes(built, api):
+    """The built world plus one bill per surveyed shape, projected through the real refresh route."""
+    for n, (identifier, _) in enumerate(_SHAPES, start=100):
+        _bill(built, "ak", n, identifier, f"Shape fixture {n}")
+    assert api.post("/ddp/search/refresh").status_code == 200
+    return built
+
+
+@pytest.mark.parametrize(
+    "identifier,query",
+    [(i, q) for i, queries in _SHAPES for q in queries],
+)
+def test_search_exact_finds_every_surveyed_bill_number_shape(shapes, api, identifier, query):
+    hits = api.get("/ddp/search", params={"q": query, "jurisdiction": ["AK"]}).json()["exact"]
+    assert [h["identifier"] for h in hits] == [identifier]
+
+
+@pytest.mark.parametrize(
+    "identifier,query",
+    [(i, q) for i, queries in _SHAPES for q in queries],
+)
+def test_suggest_finds_every_surveyed_bill_number_shape_too(shapes, api, identifier, query):
+    """suggest depends on the same gate and the same normalisation through its own PREFIX_SQL."""
+    r = api.get("/ddp/search/suggest", params={"q": query, "jurisdiction": ["AK"]}).json()
+    assert identifier in [h["identifier"] for h in r["results"]]
+
+
+@pytest.mark.parametrize(
+    "q",
+    ["HB 1", "HB 12", "SB 2518", "HB 5403E", "HCONRES 135", "H.R. 1", "H. R. 1", "H.J. Res. 1", "S.J.Res. 9", "HJR A", "HB-1C", "hb1c"],
+)
+def test_the_bill_number_gate_accepts_real_shapes(q):
+    assert ddp_search._likely_bill_id.fullmatch(q)
+
+
+@pytest.mark.parametrize(
+    "q",
+    ["school lunch", "medicaid expansion", "qqqq zzzz wwww", "HB", "a", "H", "tax cut now", "hello world 12345678"],
+)
+def test_the_bill_number_gate_rejects_ordinary_queries(q):
+    assert not ddp_search._likely_bill_id.fullmatch(q)
+
+
+def test_the_bill_number_gate_is_fast_on_pathological_whitespace():
+    """The two adjacent whitespace quantifiers must not turn a long run of spaces into a stall: a query is
+    at most 200 characters (MAX_QUERY_CHARS), so the worst case here is the longest accepted query."""
+    import time
+
+    started = time.monotonic()
+    assert not ddp_search._likely_bill_id.fullmatch("A" + " " * 198 + "1x3")
+    assert not ddp_search._likely_bill_id.fullmatch("HB" + " " * 190 + "x1y")
+    assert not ddp_search._likely_bill_id.fullmatch(" " * 200)
+    assert time.monotonic() - started < 1.0
+
+
 def test_search_full_text_finds_archived_document_text(built, api):
     r = api.get(
         "/ddp/search", params={"q": "wetland newts", "jurisdiction": ["AK"]}
