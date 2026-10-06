@@ -303,7 +303,8 @@ _SHAPES = [
     ("SJRES 9", ["SJRES 9", "SJRES9"]),
     ("HJR A", ["HJR A", "hjr a", "HJR-A"]),
     ("HJR AA", ["HJR AA"]),
-    ("HR 7", ["HR 7", "H.R. 7", "h.r.7"]),
+    ("HR 7", ["HR 7", "H.R. 7", "h.r.7", "H. R. 7"]),
+    ("HJRES 1", ["HJRES 1", "H.J. Res. 1", "H.J.Res.1"]),
 ]
 
 
@@ -325,14 +326,19 @@ def test_search_exact_finds_every_surveyed_bill_number_shape(shapes, api, identi
     assert [h["identifier"] for h in hits] == [identifier]
 
 
-def test_suggest_finds_a_trailing_letter_number(shapes, api):
-    r = api.get("/ddp/search/suggest", params={"q": "HB 1C", "jurisdiction": ["AK"]}).json()
-    assert [h["identifier"] for h in r["results"][:1]] == ["HB 1C"]
+@pytest.mark.parametrize(
+    "identifier,query",
+    [(i, q) for i, queries in _SHAPES for q in queries],
+)
+def test_suggest_finds_every_surveyed_bill_number_shape_too(shapes, api, identifier, query):
+    """suggest depends on the same gate and the same normalisation through its own PREFIX_SQL."""
+    r = api.get("/ddp/search/suggest", params={"q": query, "jurisdiction": ["AK"]}).json()
+    assert identifier in [h["identifier"] for h in r["results"]]
 
 
 @pytest.mark.parametrize(
     "q",
-    ["HB 1", "HB 12", "SB 2518", "HB 5403E", "HCONRES 135", "H.R. 1", "HJR A", "HB-1C", "hb1c"],
+    ["HB 1", "HB 12", "SB 2518", "HB 5403E", "HCONRES 135", "H.R. 1", "H. R. 1", "H.J. Res. 1", "S.J.Res. 9", "HJR A", "HB-1C", "hb1c"],
 )
 def test_the_bill_number_gate_accepts_real_shapes(q):
     assert ddp_search._likely_bill_id.fullmatch(q)
@@ -344,6 +350,18 @@ def test_the_bill_number_gate_accepts_real_shapes(q):
 )
 def test_the_bill_number_gate_rejects_ordinary_queries(q):
     assert not ddp_search._likely_bill_id.fullmatch(q)
+
+
+def test_the_bill_number_gate_is_fast_on_pathological_whitespace():
+    """The two adjacent whitespace quantifiers must not turn a long run of spaces into a stall: a query is
+    at most 200 characters (MAX_QUERY_CHARS), so the worst case here is the longest accepted query."""
+    import time
+
+    started = time.monotonic()
+    assert not ddp_search._likely_bill_id.fullmatch("A" + " " * 198 + "1x3")
+    assert not ddp_search._likely_bill_id.fullmatch("HB" + " " * 190 + "x1y")
+    assert not ddp_search._likely_bill_id.fullmatch(" " * 200)
+    assert time.monotonic() - started < 1.0
 
 
 def test_search_full_text_finds_archived_document_text(built, api):

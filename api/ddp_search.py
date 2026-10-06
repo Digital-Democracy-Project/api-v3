@@ -32,10 +32,12 @@ WORD_SIMILARITY_THRESHOLD = "0.5"
 # positive costs a cheap empty query and a false negative hides a bill that exists (OPEN-316). Shapes
 # surveyed over every projected bill: HB 1, SB 2518 | HB 1C, HB 5403E (FL special sessions end in a
 # letter) | HCONRES 135, SJRES 9 (US prefixes run to 7 letters) | HJR A, HJR AA (MI numbers some
-# resolutions by letter alone), plus how people type them: H.R. 1, HB-1C. The letter-only shape needs a
-# space or hyphen, so a bare word is never taken for a bill number.
+# resolutions by letter alone), plus how people type them: H.R. 1, H. R. 1, H.J. Res. 1, HB-1C. A
+# prefix is up to 7 letters, each optionally followed by a dot and a space; the letter-only shape needs
+# a space or hyphen, so a bare word is never taken for a bill number.
 _likely_bill_id = re.compile(
-    r"[A-Za-z][A-Za-z.]{0,8}(?:\s*-?\s*\d{1,5}[A-Za-z]{0,2}|[\s-]+[A-Za-z]{1,2})"
+    r"(?:[A-Za-z]\.?[ \t]?){1,7}[ \t]*-?[ \t]*\d{1,5}[A-Za-z]{0,2}"
+    r"|(?:[A-Za-z]\.?){1,7}[\s-]+[A-Za-z]{1,2}"
 )
 
 _BILL_COLUMNS = """
