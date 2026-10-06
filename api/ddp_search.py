@@ -204,6 +204,66 @@ PEOPLE_SQL = text(
 """
 )
 
+# OPEN-326: the score a transposition hit carries. A hit is a real surname that is the typed word with two adjacent
+# letters swapped, so it is one edit from an exact match, but it was scored at the 0.5 threshold, the least a hit can
+# score, and "Garica" then lost to bills whose titles merely share trigrams with it (0.57; measured 2026-10-06 on 245
+# one-swap typos of real current surnames: the best bill title scored a median 0.57, p95 0.75), so the suggest cut
+# of 8 showed bills and no Garcia. 0.9 is above those weak title matches and below 1.0, which is the typed word
+# itself being a word of a title or a name, still the stronger evidence.
+TRANSPOSED_SURNAME_SCORE = 0.9
+
+# OPEN-326: a swapped pair of letters destroys most of a short surname's trigrams, so "Smtih" scores 0.33 against
+# "Adam Smith" and falls under the 0.5 threshold above (measured 2026-10-05 on the 4,651 current legislators:
+# a lowered threshold finds it only at 0.3, where ordinary words such as "budget" and "housing" start returning
+# legislators, 5 of 33 non-name queries at 0.5 against 27 of 33 at 0.3). So the transposed spellings of a one-word
+# query are also matched EXACTLY against surnames: every hit is a real surname that is the typed word with two
+# adjacent letters swapped, which no loose similarity can produce (an ordinary word that happens to be one swap
+# away from a surname would still match; none of 33 sampled non-name queries did). Aliases count, as in
+# PEOPLE_SQL. The comparison is on lower() in the database, so a non-ASCII surname needs a UTF-8 database.
+PEOPLE_TRANSPOSED_SQL = text(
+    r"""
+    WITH names AS (
+        SELECT p.id AS person_id, p.name AS matched_name FROM opencivicdata_person p
+        UNION ALL
+        SELECT n.person_id, n.name FROM opencivicdata_personname n
+    )
+    SELECT p.id, p.name, p.primary_party, p.current_jurisdiction_id,
+           p."current_role" ->> 'title'              AS role_title,
+           p."current_role" ->> 'org_classification' AS chamber,
+           p."current_role" ->> 'district'           AS district,
+           CAST(:score AS float)                     AS score
+    FROM names JOIN opencivicdata_person p ON p.id = names.person_id
+    WHERE p.current_jurisdiction_id = ANY(:jids)
+      AND lower(names.matched_name) ~ :pattern
+    GROUP BY p.id, p.name, p.primary_party, p.current_jurisdiction_id, p."current_role"
+    ORDER BY p.name
+    LIMIT :limit
+"""
+)
+
+
+def _surname_pattern(variants: List[str]) -> str:
+    """One regular expression for "the last word of the name, before an optional generational suffix, is one of
+    `variants`". The variants are letters only (`_ONE_WORD` guarantees it), so they need no escaping. One pattern
+    per row is a third faster than stripping the suffix and then cutting the last word (measured 2026-10-06 on the
+    4,090 people and 7,016 aliases of the Mac's database: 11.8 ms to 7.9 ms, the same rows for every query tried)."""
+    return r"(^|\s)(" + "|".join(variants) + r")(,?\s+(jr|sr|ii|iii|iv|md)\.?)?\s*$"
+
+
+_ONE_WORD = re.compile(r"[^\W\d_]{4,30}")  # letters only (accents allowed): one word, 4 to 30 letters
+
+
+def _transposed_spellings(q: str) -> List[str]:
+    """The lower-cased query with each pair of adjacent DIFFERENT letters swapped, one spelling per swap; empty
+    unless the query is a single alphabetic word of 4 to 30 letters (a phrase, a number or a hyphenated name
+    is left to the trigram match alone)."""
+    word = q.strip().lower()
+    if not _ONE_WORD.fullmatch(word):
+        return []
+    return sorted(
+        {word[:i] + word[i + 1] + word[i] + word[i + 2 :] for i in range(len(word) - 1) if word[i] != word[i + 1]}
+    )
+
 
 def _abbr(jurisdiction_id: str) -> str:
     return lookup(jurisdiction_id=jurisdiction_id).abbr.upper()
@@ -255,6 +315,28 @@ def _person_hit(row) -> dict:
         "district": row.district,
         "score": row.score,
     }
+
+
+def _people_hits(db: Session, params: dict) -> List[dict]:
+    """People for the query: the trigram matches, then (OPEN-326) anyone whose surname is the typed word with two
+    adjacent letters swapped. A transposition hit is scored `TRANSPOSED_SURNAME_SCORE`, above the weak title
+    matches a misspelled word collects and below an exact word match. A person found both ways appears once, with
+    the higher of the two scores, so everyone with the corrected surname ranks together. Each query is limited
+    separately, so this can return up to twice `limit`: the callers sort the merged list and cut it to `limit`."""
+    hits = [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
+    variants = _transposed_spellings(params["q"])
+    if variants:
+        found = {h["id"]: h for h in hits}
+        rows = db.execute(
+            PEOPLE_TRANSPOSED_SQL,
+            {**params, "pattern": _surname_pattern(variants), "score": TRANSPOSED_SURNAME_SCORE},
+        )
+        for r in rows:
+            if r.id in found:
+                found[r.id]["score"] = max(found[r.id]["score"], TRANSPOSED_SURNAME_SCORE)
+            else:
+                hits.append(_person_hit(r))
+    return hits
 
 
 def _rank(hit: dict):
@@ -348,7 +430,7 @@ def search(
         if "bill" in wanted and not _is_missing_bill_number(q, exact):
             names += [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
         if "person" in wanted:
-            names += [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
+            names += _people_hits(db, params)
         names.sort(key=_rank)
     return {
         "q": q,
@@ -382,7 +464,7 @@ def suggest(
         fuzzy = []
         if not _is_missing_bill_number(q, results):
             fuzzy += [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
-        fuzzy += [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
+        fuzzy += _people_hits(db, params)
         fuzzy.sort(key=_rank)
         seen = {h["id"] for h in results}
         results += [h for h in fuzzy if h["id"] not in seen]

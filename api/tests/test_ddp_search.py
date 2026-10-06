@@ -395,6 +395,126 @@ def test_search_finds_a_person_by_alias(built, api):
     )
 
 
+# --- OPEN-326: a swapped pair of letters in a surname ----------------------------------------------
+
+
+def _people(api, q, jurisdictions=("AK",), path="/ddp/search"):
+    params = {"q": q, "jurisdiction": list(jurisdictions)}
+    if path == "/ddp/search":
+        params["types"] = ["person"]
+    body = api.get(path, params=params).json()
+    return body["names"] if path == "/ddp/search" else body["results"]
+
+
+def test_search_finds_a_surname_typed_with_two_letters_swapped(built, api):
+    """"Whtifield" scores under the 0.5 word_similarity threshold against "Nancy Whitfield", so the trigram
+    match alone returns nobody; the transposed spelling "whitfield" is matched exactly against surnames."""
+    hits = _people(api, "Whtifield")
+    assert _ids(hits) == ["ocd-person/t309-ak-2"]
+    assert hits[0]["name"] == "Nancy Whitfield" and hits[0]["score"] == ddp_search.TRANSPOSED_SURNAME_SCORE
+
+
+def test_a_transposition_hit_appears_once_when_the_trigram_match_also_finds_the_person(built, api):
+    hits = _people(api, "Smithsno")
+    assert _ids(hits) == ["ocd-person/t309-ak-1"]
+    assert hits[0]["score"] >= ddp_search.TRANSPOSED_SURNAME_SCORE  # the higher of the two, not the trigram's
+
+
+def test_suggest_finds_a_surname_typed_with_two_letters_swapped(built, api):
+    hits = _people(api, "Whtifield", path="/ddp/search/suggest")
+    assert [h["id"] for h in hits if h["entity_type"] == "person"] == ["ocd-person/t309-ak-2"]
+
+
+def test_the_surname_is_taken_without_a_generational_suffix(built, api):
+    _person(built, "ak", 9, "Maria Garcia, Jr.")
+    assert _ids(_people(api, "Garica")) == ["ocd-person/t309-ak-9"]
+
+
+def test_many_people_sharing_the_corrected_surname_are_capped_at_the_limit_in_name_order(built, api):
+    for n, first in enumerate(("Ana", "Ben", "Cy", "Di")):
+        _person(built, "ak", 20 + n, f"{first} Garcia")
+    expected = ["ocd-person/t309-ak-20", "ocd-person/t309-ak-21"]  # equal scores: _rank orders by name
+    r = api.get("/ddp/search", params={"q": "Garica", "jurisdiction": ["AK"], "types": ["person"], "limit": 2})
+    assert _ids(r.json()["names"]) == expected
+    r = api.get("/ddp/search/suggest", params={"q": "Garica", "jurisdiction": ["AK"], "limit": 2})
+    assert _ids(r.json()["results"]) == expected
+
+
+def test_a_transposed_surname_outranks_bills_that_only_share_trigrams_with_the_typo(built, api):
+    """OPEN-326, the "Garica" case: bills whose titles merely resemble the typo score above the bare 0.5 a
+    transposition hit used to carry, so suggest's cut of 8 showed bills and no Garcia."""
+    _person(built, "ak", 40, "Ana Garcia")
+    for n in range(10):
+        _bill(built, "ak", 60 + n, f"HB {60 + n}", f"America Grows Act of {2026 + n}")  # word_similarity 0.57 to "garica"
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get("/ddp/search/suggest", params={"q": "Garica", "jurisdiction": ["AK"], "limit": 8}).json()["results"]
+    assert r[0]["id"] == "ocd-person/t309-ak-40"
+    weak = [h for h in r if h["entity_type"] == "bill"]
+    assert weak and all(0.5 <= h["score"] < ddp_search.TRANSPOSED_SURNAME_SCORE for h in weak)  # the bills were real rivals
+    body = api.get("/ddp/search", params={"q": "Garica", "jurisdiction": ["AK"]}).json()
+    assert body["names"][0]["id"] == "ocd-person/t309-ak-40"
+
+
+def test_a_name_typed_correctly_still_beats_a_transposition_hit(built, api):
+    """The word itself is stronger evidence than a swap of it: a person whose surname IS the typed word
+    (score 1.0) ranks above one whose surname is only that word swapped."""
+    _person(built, "ak", 41, "Ana Garica")
+    _person(built, "ak", 42, "Ben Garcia")
+    r = _people(api, "Garica")
+    assert _ids(r)[:2] == ["ocd-person/t309-ak-41", "ocd-person/t309-ak-42"]
+    assert r[0]["score"] > r[1]["score"] == ddp_search.TRANSPOSED_SURNAME_SCORE
+
+
+def test_only_the_last_word_of_a_name_counts_as_the_surname(built, api):
+    """"Garcia" as a first or middle name is not a Garcia: the surname is the last word, before any suffix."""
+    _person(built, "ak", 43, "Garcia Lopez")
+    _person(built, "ak", 44, "Rosa Garcia Lopez")
+    assert _people(api, "Garica") == []
+    assert _ids(_people(api, "Lpoez")) == ["ocd-person/t309-ak-43", "ocd-person/t309-ak-44"]  # the last word does match
+
+
+def test_the_transposition_query_is_limited_in_sql(built):
+    for n in range(4):
+        _person(built, "ak", 50 + n, f"Person{n} Garcia")
+    rows = built.execute(
+        ddp_search.PEOPLE_TRANSPOSED_SQL,
+        {"jids": [JIDS["ak"]], "pattern": ddp_search._surname_pattern(["garcia"]), "score": 0.9, "limit": 2},
+    ).fetchall()
+    assert len(rows) == 2  # the callers cut to the limit anyway; this bounds the work
+
+
+def test_a_surname_is_found_through_an_alias(built, api):
+    """The swap is in the middle of a short surname, which the trigram match cannot reach ("smtih" scores 0.33),
+    and the surname is only in the alias, so only the transposition query's alias rows can find it."""
+    _person(built, "ak", 30, "Wilhelmina Ortega", aliases=["Willie Smith"])
+    assert _ids(_people(api, "Smtih")) == ["ocd-person/t309-ak-30"]
+
+
+def test_an_accented_surname_typed_with_its_accent_is_found(built):
+    """Called below the HTTP layer on purpose: starlette 0.21's TestClient mangles a non-ASCII query string
+    (a real uvicorn decodes it correctly), so this pins the SQL: Python's lower() and the database's agree."""
+    _person(built, "ak", 31, "Beatriz \u00c1lvarez")
+    params = {"q": "\u00c1lvraez", "jids": [JIDS["ak"]], "limit": 8}
+    assert [h["id"] for h in ddp_search._people_hits(built, params)] == ["ocd-person/t309-ak-31"]
+
+
+def test_a_transposed_word_that_is_no_surname_returns_nobody(built, api):
+    assert _people(api, "Budegt") == []
+
+
+def test_transposition_matches_stay_inside_the_requested_jurisdictions(built, api):
+    assert _people(api, "Yellwotail", ("AK",)) == []
+    assert _ids(_people(api, "Yellwotail", ("WY",))) == ["ocd-person/t309-wy-1"]
+
+
+def test_transposed_spellings_are_only_made_for_one_alphabetic_word():
+    assert "smith" in ddp_search._transposed_spellings("Smtih")
+    assert ddp_search._transposed_spellings("Smtih") == sorted(set(ddp_search._transposed_spellings("smtih")))
+    assert "aabb" not in ddp_search._transposed_spellings("aabb")  # equal neighbours swap to the same word
+    for not_a_word in ("abc", "Nancy Whtifield", "O'Brien", "Smith-Jones", "ab12", "1234", "x" * 31, ""):
+        assert ddp_search._transposed_spellings(not_a_word) == [], not_a_word
+
+
 def test_search_jurisdiction_session_and_type_scoping(built, api):
     r = api.get("/ddp/search", params={"q": "expansion", "jurisdiction": ["WY"]}).json()
     assert {h["jurisdiction"] for k in ("exact", "text", "names") for h in r[k]} == {
