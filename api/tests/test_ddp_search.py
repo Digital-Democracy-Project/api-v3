@@ -292,6 +292,78 @@ def test_search_exact_scoped_and_ambiguous_across_jurisdictions(built, api):
     assert [h["jurisdiction"] for h in only["exact"]] == ["WY"]
 
 
+# Real bill-number shapes the exact tier used to miss (OPEN-316), surveyed 2026-10-05 over every
+# projected bill: FL special sessions end in a letter (HB 1C, HB 5403E), the US has 5-7 letter prefixes
+# (HJRES, HCONRES), MI numbers some resolutions by letter alone (HJR A), and people type dots (H.R. 1).
+_SHAPES = [
+    # (stored identifier, queries that must find exactly it)
+    ("HB 1C", ["HB 1C", "HB1C", "hb 1c", "HB-1C"]),
+    ("HB 5403E", ["HB 5403E", "hb5403e"]),
+    ("HCONRES 1", ["HCONRES 1", "hconres1"]),
+    ("SJRES 9", ["SJRES 9", "SJRES9"]),
+    ("HJR A", ["HJR A", "hjr a", "HJR-A"]),
+    ("HJR AA", ["HJR AA"]),
+    ("HR 7", ["HR 7", "H.R. 7", "h.r.7", "H. R. 7"]),
+    ("HJRES 1", ["HJRES 1", "H.J. Res. 1", "H.J.Res.1"]),
+]
+
+
+@pytest.fixture
+def shapes(built, api):
+    """The built world plus one bill per surveyed shape, projected through the real refresh route."""
+    for n, (identifier, _) in enumerate(_SHAPES, start=100):
+        _bill(built, "ak", n, identifier, f"Shape fixture {n}")
+    assert api.post("/ddp/search/refresh").status_code == 200
+    return built
+
+
+@pytest.mark.parametrize(
+    "identifier,query",
+    [(i, q) for i, queries in _SHAPES for q in queries],
+)
+def test_search_exact_finds_every_surveyed_bill_number_shape(shapes, api, identifier, query):
+    hits = api.get("/ddp/search", params={"q": query, "jurisdiction": ["AK"]}).json()["exact"]
+    assert [h["identifier"] for h in hits] == [identifier]
+
+
+@pytest.mark.parametrize(
+    "identifier,query",
+    [(i, q) for i, queries in _SHAPES for q in queries],
+)
+def test_suggest_finds_every_surveyed_bill_number_shape_too(shapes, api, identifier, query):
+    """suggest depends on the same gate and the same normalisation through its own PREFIX_SQL."""
+    r = api.get("/ddp/search/suggest", params={"q": query, "jurisdiction": ["AK"]}).json()
+    assert identifier in [h["identifier"] for h in r["results"]]
+
+
+@pytest.mark.parametrize(
+    "q",
+    ["HB 1", "HB 12", "SB 2518", "HB 5403E", "HCONRES 135", "H.R. 1", "H. R. 1", "H.J. Res. 1", "S.J.Res. 9", "HJR A", "HB-1C", "hb1c"],
+)
+def test_the_bill_number_gate_accepts_real_shapes(q):
+    assert ddp_search._likely_bill_id.fullmatch(q)
+
+
+@pytest.mark.parametrize(
+    "q",
+    ["school lunch", "medicaid expansion", "qqqq zzzz wwww", "HB", "a", "H", "tax cut now", "hello world 12345678"],
+)
+def test_the_bill_number_gate_rejects_ordinary_queries(q):
+    assert not ddp_search._likely_bill_id.fullmatch(q)
+
+
+def test_the_bill_number_gate_is_fast_on_pathological_whitespace():
+    """The two adjacent whitespace quantifiers must not turn a long run of spaces into a stall: a query is
+    at most 200 characters (MAX_QUERY_CHARS), so the worst case here is the longest accepted query."""
+    import time
+
+    started = time.monotonic()
+    assert not ddp_search._likely_bill_id.fullmatch("A" + " " * 198 + "1x3")
+    assert not ddp_search._likely_bill_id.fullmatch("HB" + " " * 190 + "x1y")
+    assert not ddp_search._likely_bill_id.fullmatch(" " * 200)
+    assert time.monotonic() - started < 1.0
+
+
 def test_search_full_text_finds_archived_document_text(built, api):
     r = api.get(
         "/ddp/search", params={"q": "wetland newts", "jurisdiction": ["AK"]}
@@ -494,6 +566,79 @@ def test_similarity_threshold_does_not_leak_to_the_pooled_connection(built, api)
         db.close()
 
 
+def _bill_with_look_alike_title(db):
+    """A bill whose TITLE resembles a bill number that does not exist, the way real procedural titles
+    ("Providing for consideration of the bill (H.R. 9999)") resemble numbers."""
+    _bill(db, "ak", 31, "SB 31", "Relating to HB 9999999 appropriations")
+
+
+def test_a_bill_number_that_does_not_exist_finds_nothing_not_look_alike_titles(built, api):
+    """OPEN-316: "HB 99999999" is well-formed but matches no bill; it fell through to the fuzzy title
+    match and returned bills whose titles share trigrams with it. A number is looked up as a number."""
+    _bill_with_look_alike_title(built)
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get("/ddp/search", params={"q": "HB 99999999", "jurisdiction": ["AK"]}).json()
+    assert (r["exact"], r["text"], r["names"]) == ([], [], [])
+
+
+def test_a_bill_number_that_exists_still_gets_title_matches_too(built, api):
+    """Only a number that matched nothing skips the title match: a number that exists behaves as before."""
+    _bill(built, "ak", 32, "SB 32", "Relating to HB 12 funding")
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get("/ddp/search", params={"q": "HB 12", "jurisdiction": ["AK"]}).json()
+    assert _ids(r["exact"]) == ["ocd-bill/t309-ak-12"]
+    assert "ocd-bill/t309-ak-32" in _ids(r["names"])
+
+
+def test_suggest_a_bill_number_prefix_with_no_match_suggests_no_look_alike_titles(built, api):
+    _bill_with_look_alike_title(built)
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get("/ddp/search/suggest", params={"q": "HB 99999", "jurisdiction": ["AK"]}).json()
+    assert [h for h in r["results"] if h["entity_type"] == "bill"] == []
+
+
+@pytest.mark.parametrize(
+    "q",
+    ["HB 99999999", "S 987654", "S1", "H 1", "H.R. 1", "H. R. 1", "H.J. Res. 1", "HB 1C", "HB-1", "hjres 12", "SB 2518E", "SPB 7042", "SD 50"],
+)
+def test_a_recognised_designator_then_digits_is_a_bill_number(q):
+    assert ddp_search._is_missing_bill_number(q, [])
+    assert not ddp_search._is_missing_bill_number(q, ["a hit"])  # found by number: title matching stays on
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        "school lunch", "school lu", "medicade expansion", "qqqq zzzz wwww", "HB", "smith 3rd grade",
+        "tax 2026 reform", "COVID 19", "COVID-19", "Title 42", "Section 230", "Article 5", "Prop 8", "U.S. 50",
+        "Chapter 11 bankruptcy", "HJR A", "H2O", "H 2 O", "S3D", "H.2.O",
+    ],
+)
+def test_anything_else_keeps_fuzzy_title_matching(q):
+    """Numbered topics and half-typed titles are searches for a title, not a bill: only a recognised
+    designator followed by digits counts as a number, so an unknown prefix fails safe."""
+    assert not ddp_search._is_missing_bill_number(q, [])
+
+
+@pytest.mark.parametrize("q", ["COVID 19", "Title 42", "Section 230", "Prop 8", "Article 5", "H2O"])
+def test_numbered_topic_titles_are_still_found_by_search_and_suggest(built, api, q):
+    """The reviewer's case: a bill titled for a numbered topic must come back for that query. None of these
+    is a bill number, so none may lose its title match."""
+    for n, title in enumerate(
+        ("COVID 19 Emergency Relief", "Title 42 Border Authority", "Section 230 Reform", "Prop 8 Repeal", "Article 5 Convention", "H2O Quality Standards"),
+        start=40,
+    ):
+        _bill(built, "ak", n, f"SB {n}", title)
+    assert api.post("/ddp/search/refresh").status_code == 200
+    wanted = {"COVID 19": 40, "Title 42": 41, "Section 230": 42, "Prop 8": 43, "Article 5": 44, "H2O": 45}[q]
+    assert f"ocd-bill/t309-ak-{wanted}" in _ids(
+        api.get("/ddp/search", params={"q": q, "jurisdiction": ["AK"]}).json()["names"]
+    )
+    assert f"ocd-bill/t309-ak-{wanted}" in _ids(
+        api.get("/ddp/search/suggest", params={"q": q, "jurisdiction": ["AK"]}).json()["results"]
+    )
+
+
 # --- suggest --------------------------------------------------------------------------------------
 
 
@@ -501,10 +646,59 @@ def test_suggest_bill_number_prefix_first_then_names(built, api):
     r = api.get(
         "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK"]}
     ).json()
-    assert [h["identifier"] for h in r["results"][:2]] == ["HB 12", "HB 1"] or {
-        h["identifier"] for h in r["results"][:2]
-    } == {"HB 1", "HB 12"}
+    assert [h["identifier"] for h in r["results"][:2]] == ["HB 1", "HB 12"]
     assert all(h["entity_type"] == "bill" for h in r["results"][:2])
+
+
+def test_suggest_puts_the_exact_number_first_then_longer_numbers(built, api):
+    """OPEN-316: "HB 1" listed HB 116, HB 147 ... and buried the bills numbered exactly HB 1, because the
+    prefix lookup ordered by latest action date. Every number added here is newer than the exact ones, so a
+    date-only order would put them first."""
+    for n, identifier, code in ((200, "HB 10", "ak"), (201, "HB 100", "ak"), (202, "HB 123", "wy")):
+        b = _bill(built, code, n, identifier, f"Newer bill {n}")
+        b.latest_action_date = "2026-06-01"
+        built.commit()
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get(
+        "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 10}
+    ).json()
+    ids = [h["identifier"] for h in r["results"] if h["entity_type"] == "bill"]
+    assert ids[:2] == ["HB 1", "HB 1"]  # the exact number in both jurisdictions, before anything longer
+    longer = ids[2:]
+    assert sorted(longer, key=len) == longer  # then shorter numbers before longer ones
+    assert {"HB 10", "HB 12", "HB 100", "HB 123"} <= set(longer)
+
+
+def test_suggest_limit_keeps_the_exact_numbers_and_drops_newer_longer_ones(built, api):
+    """The ORDER BY inside the CTE decides which rows survive LIMIT. Two exact HB 1 (older) against four newer,
+    longer numbers, with limit 2: a date-only inner order would keep the newer ones and drop the exact bills
+    before any outer sort could rescue them."""
+    for n, identifier in enumerate(("HB 10", "HB 11", "HB 100", "HB 101"), start=210):
+        b = _bill(built, "ak", n, identifier, f"Newer bill {n}")
+        b.latest_action_date = "2026-06-01"
+        built.commit()
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get(
+        "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 2}
+    ).json()
+    assert [h["identifier"] for h in r["results"]] == ["HB 1", "HB 1"]
+
+
+def test_suggest_bill_number_ties_break_by_jurisdiction_whatever_order_they_are_asked_in(built, api):
+    """AK and WY each have an HB 1 with the same date and length: the order is the documented tie-break
+    (jurisdiction id), not whichever the planner scans first or the order the codes were given in."""
+    for order in (["AK", "WY"], ["WY", "AK"]):
+        r = api.get("/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": order, "limit": 10}).json()
+        assert [h["jurisdiction"] for h in r["results"][:2]] == ["AK", "WY"]
+
+
+def test_suggest_bill_hits_keep_the_public_shape(built, api):
+    """The CTE now carries identifier_norm and norm_len for ordering; neither may leak into the response."""
+    hit = api.get("/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK"]}).json()["results"][0]
+    assert set(hit) == {
+        "entity_type", "id", "identifier", "title", "jurisdiction", "jurisdiction_name", "session",
+        "chamber", "latest_action_date", "latest_action_description", "snippet", "score",
+    }
 
 
 def test_suggest_prefers_a_name_and_does_not_repeat_ids(built, api):

@@ -27,7 +27,18 @@ MAX_HYDRATE_IDS = 50  # one results page
 # judged set (PLAN §9) before treating 0.5 as final.
 WORD_SIMILARITY_THRESHOLD = "0.5"
 
-_likely_bill_id = re.compile(r"[A-Za-z]{1,4}\s*-?\s*\d{1,5}")
+# Whether a query could be a bill number, which decides if the exact tier (and suggest's prefix lookup)
+# is tried. The gate is deliberately generous: all it gates is one indexed equality lookup, so a false
+# positive costs a cheap empty query and a false negative hides a bill that exists (OPEN-316). Shapes
+# surveyed over every projected bill: HB 1, SB 2518 | HB 1C, HB 5403E (FL special sessions end in a
+# letter) | HCONRES 135, SJRES 9 (US prefixes run to 7 letters) | HJR A, HJR AA (MI numbers some
+# resolutions by letter alone), plus how people type them: H.R. 1, H. R. 1, H.J. Res. 1, HB-1C. A
+# prefix is up to 7 letters, each optionally followed by a dot and a space; the letter-only shape needs
+# a space or hyphen, so a bare word is never taken for a bill number.
+_likely_bill_id = re.compile(
+    r"(?:[A-Za-z]\.?[ \t]?){1,7}[ \t]*-?[ \t]*\d{1,5}[A-Za-z]{0,2}"
+    r"|(?:[A-Za-z]\.?){1,7}[\s-]+[A-Za-z]{1,2}"
+)
 
 _BILL_COLUMNS = """
     s.bill_id, s.jurisdiction_id, s.session_identifier, s.identifier, s.title, s.chamber,
@@ -54,7 +65,7 @@ EXACT_SQL = text(
     WITH hits AS (
         SELECT {_BILL_COLUMNS}, 1.0::float AS score
         FROM ddp_bill_search s
-        WHERE s.identifier_norm = upper(regexp_replace(:q, '[\\s-]', '', 'g'))
+        WHERE s.identifier_norm = upper(regexp_replace(:q, '[\\s.-]', '', 'g'))
           AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
         ORDER BY s.latest_action_date DESC NULLS LAST
         LIMIT :limit
@@ -147,17 +158,27 @@ SAMPLE_SQL = text(
 """
 )
 
+# Type-ahead order for a typed bill number (OPEN-316): shorter numbers first, so the bills numbered exactly
+# what was typed come before longer ones ("HB 1" before HB 10 before HB 116: every match starts with the
+# typed text, so the exact number is always the shortest), newest action first within a length, and
+# last-resort keys so the order never depends on how Postgres happens to scan. It is applied inside the
+# CTE (to pick the rows that survive LIMIT) and again on the way out, because the order of a CTE's rows is
+# not part of its contract.
 PREFIX_SQL = text(
     f"""
     WITH hits AS (
-        SELECT {_BILL_COLUMNS}, 1.0::float AS score
+        SELECT {_BILL_COLUMNS}, 1.0::float AS score, s.identifier_norm,
+               length(s.identifier_norm) AS norm_len
         FROM ddp_bill_search s
-        WHERE s.identifier_norm LIKE upper(regexp_replace(:q, '[\\s-]', '', 'g')) || '%'
+        WHERE s.identifier_norm LIKE upper(regexp_replace(:q, '[\\s.-]', '', 'g')) || '%'
           AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
-        ORDER BY s.latest_action_date DESC NULLS LAST, s.identifier_norm
+        ORDER BY norm_len, s.latest_action_date DESC NULLS LAST,
+                 s.identifier_norm, s.jurisdiction_id, s.bill_id
         LIMIT :limit
     )
     SELECT hits.*, NULL::text AS snippet FROM hits
+    ORDER BY hits.norm_len, hits.latest_action_date DESC NULLS LAST,
+             hits.identifier_norm, hits.jurisdiction_id, hits.bill_id
 """
 )
 
@@ -324,6 +345,31 @@ def _validated_query(q: str, min_len: int, max_len: int) -> str:
     return q
 
 
+# The bill-type prefixes that exist in the data (surveyed over every projected bill, 2026-10-05): HB SB HR SR
+# S H, HRES SRES HJRES SJRES HCONRES SCONRES, HJR SJR HCR SCR HJ SJ HM SM HJM SJM HCM SCM, SD HD (MA),
+# SPB (FL). Longest first so "HCONRES" is not read as "H" + "CONRES". A prefix that is not here is NOT
+# treated as a bill number, which fails safe: such a query simply keeps its title matching. Only the
+# multi-letter designators may end in letters (FL special sessions: HB 1C): the single-letter H and S take
+# digits only (none of the 19,943 real H/S numbers has a letter suffix), so "H2O" is a topic, not bill H 2.
+_BILL_DESIGNATORS = (
+    "HCONRES", "SCONRES", "HJRES", "SJRES", "HRES", "SRES", "HJR", "SJR", "HCR", "SCR", "HJM", "SJM",
+    "HCM", "SCM", "SPB", "HB", "SB", "HR", "SR", "HM", "SM", "HJ", "SJ", "HD", "SD",
+)
+_bill_number_like = re.compile(r"(?:(?:%s)\d+[A-Z]{0,2}|[HS]\d+)" % "|".join(_BILL_DESIGNATORS))
+
+
+def _is_missing_bill_number(q: str, found_by_number: list) -> bool:
+    """True for a query that is a bill number (a recognised designator then digits, however it is spaced or
+    dotted: "HB 99999999", "H.J. Res. 1") whose number lookup found nothing. Such a query must find nothing,
+    not bills whose TITLES merely share trigrams with it (OPEN-316: "HB 99999999" returned three unrelated
+    bills at 0.5 to 0.57 word_similarity). A number that exists keeps its title matches, and anything that
+    is not a bill number keeps fuzzy title matching: "school lu" (type-ahead needs it) and numbered topics
+    such as "Title 42", "Section 230" or "COVID 19", which are searches for a title, not a bill."""
+    if found_by_number:
+        return False
+    return bool(_bill_number_like.fullmatch(re.sub(r"[\s.-]", "", q).upper()))
+
+
 def _use_similarity_threshold(db: Session) -> None:
     # is_local=true: applies to this transaction only, never leaks to the pooled connection.
     db.execute(
@@ -363,7 +409,7 @@ def search(
             exact = [_bill_hit(r) for r in db.execute(EXACT_SQL, params)]
         text_hits = [_bill_hit(r) for r in db.execute(FTS_SQL, params)]
     if len(q) >= 3:  # trigram matching is meaningless below three characters
-        if "bill" in wanted:
+        if "bill" in wanted and not _is_missing_bill_number(q, exact):
             names += [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
         if "person" in wanted:
             names += _people_hits(db, params)
@@ -397,7 +443,9 @@ def suggest(
     if _likely_bill_id.fullmatch(q):
         results += [_bill_hit(r) for r in db.execute(PREFIX_SQL, params)]
     if len(q) >= 3:
-        fuzzy = [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
+        fuzzy = []
+        if not _is_missing_bill_number(q, results):
+            fuzzy += [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
         fuzzy += _people_hits(db, params)
         fuzzy.sort(key=_rank)
         seen = {h["id"] for h in results}
