@@ -490,6 +490,52 @@ def test_similarity_threshold_does_not_leak_to_the_pooled_connection(built, api)
         db.close()
 
 
+def _bill_with_look_alike_title(db):
+    """A bill whose TITLE resembles a bill number that does not exist, the way real procedural titles
+    ("Providing for consideration of the bill (H.R. 9999)") resemble numbers."""
+    _bill(db, "ak", 31, "SB 31", "Relating to HB 9999999 appropriations")
+
+
+def test_a_bill_number_that_does_not_exist_finds_nothing_not_look_alike_titles(built, api):
+    """OPEN-316: "HB 99999999" is well-formed but matches no bill; it fell through to the fuzzy title
+    match and returned bills whose titles share trigrams with it. A number is looked up as a number."""
+    _bill_with_look_alike_title(built)
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get("/ddp/search", params={"q": "HB 99999999", "jurisdiction": ["AK"]}).json()
+    assert (r["exact"], r["text"], r["names"]) == ([], [], [])
+
+
+def test_a_bill_number_that_exists_still_gets_title_matches_too(built, api):
+    """Only a number that matched nothing skips the title match: a number that exists behaves as before."""
+    _bill(built, "ak", 32, "SB 32", "Relating to HB 12 funding")
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get("/ddp/search", params={"q": "HB 12", "jurisdiction": ["AK"]}).json()
+    assert _ids(r["exact"]) == ["ocd-bill/t309-ak-12"]
+    assert "ocd-bill/t309-ak-32" in _ids(r["names"])
+
+
+def test_suggest_a_bill_number_prefix_with_no_match_suggests_no_look_alike_titles(built, api):
+    _bill_with_look_alike_title(built)
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get("/ddp/search/suggest", params={"q": "HB 99999", "jurisdiction": ["AK"]}).json()
+    assert [h for h in r["results"] if h["entity_type"] == "bill"] == []
+
+
+@pytest.mark.parametrize(
+    "q", ["HB 99999999", "S 987654", "H.R. 1", "HB 1C", "HB-1", "hjres 12", "SB 2518E"]
+)
+def test_the_bill_number_shape_accepts_numbers(q):
+    assert ddp_search._bill_number_like.fullmatch(q)
+
+
+@pytest.mark.parametrize(
+    "q", ["school lunch", "school lu", "medicade expansion", "qqqq zzzz wwww", "HB", "smith 3rd grade", "tax 2026 reform"]
+)
+def test_the_bill_number_shape_rejects_ordinary_queries(q):
+    """Typing a title ("school lu") must keep fuzzy title matching: only a letters-then-digits query is a number."""
+    assert not ddp_search._bill_number_like.fullmatch(q)
+
+
 # --- suggest --------------------------------------------------------------------------------------
 
 

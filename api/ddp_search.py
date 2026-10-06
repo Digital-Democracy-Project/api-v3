@@ -271,6 +271,20 @@ def _validated_query(q: str, min_len: int, max_len: int) -> str:
     return q
 
 
+# A query that is a bill number: letters (dots allowed, "H.R.") then digits, any number of digits and up
+# to two trailing letters. Stricter than _likely_bill_id, which only decides whether to TRY a number lookup
+# and so also accepts letter-only shapes ("HJR A") that look like ordinary words: this one needs a digit.
+_bill_number_like = re.compile(r"[A-Za-z][A-Za-z.]{0,8}\s*-?\s*\d+[A-Za-z]{0,2}")
+
+
+def _is_missing_bill_number(q: str, found_by_number: list) -> bool:
+    """True for a bill-number-shaped query whose number lookup found nothing. Such a query must find
+    nothing, not bills whose TITLES merely share trigrams with it (OPEN-316: "HB 99999999" returned three
+    unrelated bills at 0.5 to 0.57 word_similarity). A number that exists keeps its title matches, and a
+    query that is not shaped like a number ("school lu") keeps fuzzy title matching, which type-ahead needs."""
+    return bool(_bill_number_like.fullmatch(q)) and not found_by_number
+
+
 def _use_similarity_threshold(db: Session) -> None:
     # is_local=true: applies to this transaction only, never leaks to the pooled connection.
     db.execute(
@@ -310,7 +324,7 @@ def search(
             exact = [_bill_hit(r) for r in db.execute(EXACT_SQL, params)]
         text_hits = [_bill_hit(r) for r in db.execute(FTS_SQL, params)]
     if len(q) >= 3:  # trigram matching is meaningless below three characters
-        if "bill" in wanted:
+        if "bill" in wanted and not _is_missing_bill_number(q, exact):
             names += [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
         if "person" in wanted:
             names += [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
@@ -344,7 +358,9 @@ def suggest(
     if _likely_bill_id.fullmatch(q):
         results += [_bill_hit(r) for r in db.execute(PREFIX_SQL, params)]
     if len(q) >= 3:
-        fuzzy = [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
+        fuzzy = []
+        if not _is_missing_bill_number(q, results):
+            fuzzy += [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
         fuzzy += [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
         fuzzy.sort(key=_rank)
         seen = {h["id"] for h in results}
