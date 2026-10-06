@@ -497,10 +497,59 @@ def test_suggest_bill_number_prefix_first_then_names(built, api):
     r = api.get(
         "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK"]}
     ).json()
-    assert [h["identifier"] for h in r["results"][:2]] == ["HB 12", "HB 1"] or {
-        h["identifier"] for h in r["results"][:2]
-    } == {"HB 1", "HB 12"}
+    assert [h["identifier"] for h in r["results"][:2]] == ["HB 1", "HB 12"]
     assert all(h["entity_type"] == "bill" for h in r["results"][:2])
+
+
+def test_suggest_puts_the_exact_number_first_then_longer_numbers(built, api):
+    """OPEN-316: "HB 1" listed HB 116, HB 147 ... and buried the bills numbered exactly HB 1, because the
+    prefix lookup ordered by latest action date. Every number added here is newer than the exact ones, so a
+    date-only order would put them first."""
+    for n, identifier, code in ((200, "HB 10", "ak"), (201, "HB 100", "ak"), (202, "HB 123", "wy")):
+        b = _bill(built, code, n, identifier, f"Newer bill {n}")
+        b.latest_action_date = "2026-06-01"
+        built.commit()
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get(
+        "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 10}
+    ).json()
+    ids = [h["identifier"] for h in r["results"] if h["entity_type"] == "bill"]
+    assert ids[:2] == ["HB 1", "HB 1"]  # the exact number in both jurisdictions, before anything longer
+    longer = ids[2:]
+    assert sorted(longer, key=len) == longer  # then shorter numbers before longer ones
+    assert {"HB 10", "HB 12", "HB 100", "HB 123"} <= set(longer)
+
+
+def test_suggest_limit_keeps_the_exact_numbers_and_drops_newer_longer_ones(built, api):
+    """The ORDER BY inside the CTE decides which rows survive LIMIT. Two exact HB 1 (older) against four newer,
+    longer numbers, with limit 2: a date-only inner order would keep the newer ones and drop the exact bills
+    before any outer sort could rescue them."""
+    for n, identifier in enumerate(("HB 10", "HB 11", "HB 100", "HB 101"), start=210):
+        b = _bill(built, "ak", n, identifier, f"Newer bill {n}")
+        b.latest_action_date = "2026-06-01"
+        built.commit()
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get(
+        "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 2}
+    ).json()
+    assert [h["identifier"] for h in r["results"]] == ["HB 1", "HB 1"]
+
+
+def test_suggest_bill_number_ties_break_by_jurisdiction_whatever_order_they_are_asked_in(built, api):
+    """AK and WY each have an HB 1 with the same date and length: the order is the documented tie-break
+    (jurisdiction id), not whichever the planner scans first or the order the codes were given in."""
+    for order in (["AK", "WY"], ["WY", "AK"]):
+        r = api.get("/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": order, "limit": 10}).json()
+        assert [h["jurisdiction"] for h in r["results"][:2]] == ["AK", "WY"]
+
+
+def test_suggest_bill_hits_keep_the_public_shape(built, api):
+    """The CTE now carries identifier_norm and norm_len for ordering; neither may leak into the response."""
+    hit = api.get("/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK"]}).json()["results"][0]
+    assert set(hit) == {
+        "entity_type", "id", "identifier", "title", "jurisdiction", "jurisdiction_name", "session",
+        "chamber", "latest_action_date", "latest_action_description", "snippet", "score",
+    }
 
 
 def test_suggest_prefers_a_name_and_does_not_repeat_ids(built, api):
