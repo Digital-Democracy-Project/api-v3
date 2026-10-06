@@ -274,12 +274,14 @@ def _validated_query(q: str, min_len: int, max_len: int) -> str:
 # The bill-type prefixes that exist in the data (surveyed over every projected bill, 2026-10-05): HB SB HR SR
 # S H, HRES SRES HJRES SJRES HCONRES SCONRES, HJR SJR HCR SCR HJ SJ HM SM HJM SJM HCM SCM, SD HD (MA),
 # SPB (FL). Longest first so "HCONRES" is not read as "H" + "CONRES". A prefix that is not here is NOT
-# treated as a bill number, which fails safe: such a query simply keeps its title matching.
+# treated as a bill number, which fails safe: such a query simply keeps its title matching. Only the
+# multi-letter designators may end in letters (FL special sessions: HB 1C): the single-letter H and S take
+# digits only (none of the 19,943 real H/S numbers has a letter suffix), so "H2O" is a topic, not bill H 2.
 _BILL_DESIGNATORS = (
     "HCONRES", "SCONRES", "HJRES", "SJRES", "HRES", "SRES", "HJR", "SJR", "HCR", "SCR", "HJM", "SJM",
-    "HCM", "SCM", "SPB", "HB", "SB", "HR", "SR", "HM", "SM", "HJ", "SJ", "HD", "SD", "H", "S",
+    "HCM", "SCM", "SPB", "HB", "SB", "HR", "SR", "HM", "SM", "HJ", "SJ", "HD", "SD",
 )
-_bill_number_like = re.compile(r"(?:%s)\d+[A-Z]{0,2}" % "|".join(_BILL_DESIGNATORS))
+_bill_number_like = re.compile(r"(?:(?:%s)\d+[A-Z]{0,2}|[HS]\d+)" % "|".join(_BILL_DESIGNATORS))
 
 
 def _is_missing_bill_number(q: str, found_by_number: list) -> bool:

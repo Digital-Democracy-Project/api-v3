@@ -523,7 +523,7 @@ def test_suggest_a_bill_number_prefix_with_no_match_suggests_no_look_alike_title
 
 @pytest.mark.parametrize(
     "q",
-    ["HB 99999999", "S 987654", "H.R. 1", "H. R. 1", "H.J. Res. 1", "HB 1C", "HB-1", "hjres 12", "SB 2518E", "SPB 7042", "SD 50"],
+    ["HB 99999999", "S 987654", "S1", "H 1", "H.R. 1", "H. R. 1", "H.J. Res. 1", "HB 1C", "HB-1", "hjres 12", "SB 2518E", "SPB 7042", "SD 50"],
 )
 def test_a_recognised_designator_then_digits_is_a_bill_number(q):
     assert ddp_search._is_missing_bill_number(q, [])
@@ -535,7 +535,7 @@ def test_a_recognised_designator_then_digits_is_a_bill_number(q):
     [
         "school lunch", "school lu", "medicade expansion", "qqqq zzzz wwww", "HB", "smith 3rd grade",
         "tax 2026 reform", "COVID 19", "COVID-19", "Title 42", "Section 230", "Article 5", "Prop 8", "U.S. 50",
-        "Chapter 11 bankruptcy", "HJR A",
+        "Chapter 11 bankruptcy", "HJR A", "H2O", "H 2 O", "S3D", "H.2.O",
     ],
 )
 def test_anything_else_keeps_fuzzy_title_matching(q):
@@ -544,17 +544,17 @@ def test_anything_else_keeps_fuzzy_title_matching(q):
     assert not ddp_search._is_missing_bill_number(q, [])
 
 
-@pytest.mark.parametrize("q", ["COVID 19", "Title 42", "Section 230", "Prop 8", "Article 5"])
+@pytest.mark.parametrize("q", ["COVID 19", "Title 42", "Section 230", "Prop 8", "Article 5", "H2O"])
 def test_numbered_topic_titles_are_still_found_by_search_and_suggest(built, api, q):
     """The reviewer's case: a bill titled for a numbered topic must come back for that query. None of these
     is a bill number, so none may lose its title match."""
     for n, title in enumerate(
-        ("COVID 19 Emergency Relief", "Title 42 Border Authority", "Section 230 Reform", "Prop 8 Repeal", "Article 5 Convention"),
+        ("COVID 19 Emergency Relief", "Title 42 Border Authority", "Section 230 Reform", "Prop 8 Repeal", "Article 5 Convention", "H2O Quality Standards"),
         start=40,
     ):
         _bill(built, "ak", n, f"SB {n}", title)
     assert api.post("/ddp/search/refresh").status_code == 200
-    wanted = {"COVID 19": 40, "Title 42": 41, "Section 230": 42, "Prop 8": 43, "Article 5": 44}[q]
+    wanted = {"COVID 19": 40, "Title 42": 41, "Section 230": 42, "Prop 8": 43, "Article 5": 44, "H2O": 45}[q]
     assert f"ocd-bill/t309-ak-{wanted}" in _ids(
         api.get("/ddp/search", params={"q": q, "jurisdiction": ["AK"]}).json()["names"]
     )
