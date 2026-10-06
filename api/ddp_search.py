@@ -27,7 +27,16 @@ MAX_HYDRATE_IDS = 50  # one results page
 # judged set (PLAN §9) before treating 0.5 as final.
 WORD_SIMILARITY_THRESHOLD = "0.5"
 
-_likely_bill_id = re.compile(r"[A-Za-z]{1,4}\s*-?\s*\d{1,5}")
+# Whether a query could be a bill number, which decides if the exact tier (and suggest's prefix lookup)
+# is tried. The gate is deliberately generous: all it gates is one indexed equality lookup, so a false
+# positive costs a cheap empty query and a false negative hides a bill that exists (OPEN-316). Shapes
+# surveyed over every projected bill: HB 1, SB 2518 | HB 1C, HB 5403E (FL special sessions end in a
+# letter) | HCONRES 135, SJRES 9 (US prefixes run to 7 letters) | HJR A, HJR AA (MI numbers some
+# resolutions by letter alone), plus how people type them: H.R. 1, HB-1C. The letter-only shape needs a
+# space or hyphen, so a bare word is never taken for a bill number.
+_likely_bill_id = re.compile(
+    r"[A-Za-z][A-Za-z.]{0,8}(?:\s*-?\s*\d{1,5}[A-Za-z]{0,2}|[\s-]+[A-Za-z]{1,2})"
+)
 
 _BILL_COLUMNS = """
     s.bill_id, s.jurisdiction_id, s.session_identifier, s.identifier, s.title, s.chamber,
@@ -54,7 +63,7 @@ EXACT_SQL = text(
     WITH hits AS (
         SELECT {_BILL_COLUMNS}, 1.0::float AS score
         FROM ddp_bill_search s
-        WHERE s.identifier_norm = upper(regexp_replace(:q, '[\\s-]', '', 'g'))
+        WHERE s.identifier_norm = upper(regexp_replace(:q, '[\\s.-]', '', 'g'))
           AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
         ORDER BY s.latest_action_date DESC NULLS LAST
         LIMIT :limit
@@ -152,7 +161,7 @@ PREFIX_SQL = text(
     WITH hits AS (
         SELECT {_BILL_COLUMNS}, 1.0::float AS score
         FROM ddp_bill_search s
-        WHERE s.identifier_norm LIKE upper(regexp_replace(:q, '[\\s-]', '', 'g')) || '%'
+        WHERE s.identifier_norm LIKE upper(regexp_replace(:q, '[\\s.-]', '', 'g')) || '%'
           AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
         ORDER BY s.latest_action_date DESC NULLS LAST, s.identifier_norm
         LIMIT :limit
