@@ -320,18 +320,22 @@ def _person_hit(row) -> dict:
 def _people_hits(db: Session, params: dict) -> List[dict]:
     """People for the query: the trigram matches, then (OPEN-326) anyone whose surname is the typed word with two
     adjacent letters swapped. A transposition hit is scored `TRANSPOSED_SURNAME_SCORE`, above the weak title
-    matches a misspelled word collects and below an exact word match. A person found both ways appears once,
-    with the trigram hit. Each query is limited
+    matches a misspelled word collects and below an exact word match. A person found both ways appears once, with
+    the higher of the two scores, so everyone with the corrected surname ranks together. Each query is limited
     separately, so this can return up to twice `limit`: the callers sort the merged list and cut it to `limit`."""
     hits = [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
     variants = _transposed_spellings(params["q"])
     if variants:
-        seen = {h["id"] for h in hits}
+        found = {h["id"]: h for h in hits}
         rows = db.execute(
             PEOPLE_TRANSPOSED_SQL,
             {**params, "pattern": _surname_pattern(variants), "score": TRANSPOSED_SURNAME_SCORE},
         )
-        hits += [_person_hit(r) for r in rows if r.id not in seen]
+        for r in rows:
+            if r.id in found:
+                found[r.id]["score"] = max(found[r.id]["score"], TRANSPOSED_SURNAME_SCORE)
+            else:
+                hits.append(_person_hit(r))
     return hits
 
 

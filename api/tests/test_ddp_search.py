@@ -415,8 +415,9 @@ def test_search_finds_a_surname_typed_with_two_letters_swapped(built, api):
 
 
 def test_a_transposition_hit_appears_once_when_the_trigram_match_also_finds_the_person(built, api):
-    ids = _ids(_people(api, "Smithsno"))
-    assert ids == ["ocd-person/t309-ak-1"]
+    hits = _people(api, "Smithsno")
+    assert _ids(hits) == ["ocd-person/t309-ak-1"]
+    assert hits[0]["score"] >= ddp_search.TRANSPOSED_SURNAME_SCORE  # the higher of the two, not the trigram's
 
 
 def test_suggest_finds_a_surname_typed_with_two_letters_swapped(built, api):
