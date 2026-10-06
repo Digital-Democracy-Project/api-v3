@@ -271,18 +271,27 @@ def _validated_query(q: str, min_len: int, max_len: int) -> str:
     return q
 
 
-# A query that is a bill number: letters (dots allowed, "H.R.") then digits, any number of digits and up
-# to two trailing letters. Stricter than _likely_bill_id, which only decides whether to TRY a number lookup
-# and so also accepts letter-only shapes ("HJR A") that look like ordinary words: this one needs a digit.
-_bill_number_like = re.compile(r"[A-Za-z][A-Za-z.]{0,8}\s*-?\s*\d+[A-Za-z]{0,2}")
+# The bill-type prefixes that exist in the data (surveyed over every projected bill, 2026-10-05): HB SB HR SR
+# S H, HRES SRES HJRES SJRES HCONRES SCONRES, HJR SJR HCR SCR HJ SJ HM SM HJM SJM HCM SCM, SD HD (MA),
+# SPB (FL). Longest first so "HCONRES" is not read as "H" + "CONRES". A prefix that is not here is NOT
+# treated as a bill number, which fails safe: such a query simply keeps its title matching.
+_BILL_DESIGNATORS = (
+    "HCONRES", "SCONRES", "HJRES", "SJRES", "HRES", "SRES", "HJR", "SJR", "HCR", "SCR", "HJM", "SJM",
+    "HCM", "SCM", "SPB", "HB", "SB", "HR", "SR", "HM", "SM", "HJ", "SJ", "HD", "SD", "H", "S",
+)
+_bill_number_like = re.compile(r"(?:%s)\d+[A-Z]{0,2}" % "|".join(_BILL_DESIGNATORS))
 
 
 def _is_missing_bill_number(q: str, found_by_number: list) -> bool:
-    """True for a bill-number-shaped query whose number lookup found nothing. Such a query must find
-    nothing, not bills whose TITLES merely share trigrams with it (OPEN-316: "HB 99999999" returned three
-    unrelated bills at 0.5 to 0.57 word_similarity). A number that exists keeps its title matches, and a
-    query that is not shaped like a number ("school lu") keeps fuzzy title matching, which type-ahead needs."""
-    return bool(_bill_number_like.fullmatch(q)) and not found_by_number
+    """True for a query that is a bill number (a recognised designator then digits, however it is spaced or
+    dotted: "HB 99999999", "H.J. Res. 1") whose number lookup found nothing. Such a query must find nothing,
+    not bills whose TITLES merely share trigrams with it (OPEN-316: "HB 99999999" returned three unrelated
+    bills at 0.5 to 0.57 word_similarity). A number that exists keeps its title matches, and anything that
+    is not a bill number keeps fuzzy title matching: "school lu" (type-ahead needs it) and numbered topics
+    such as "Title 42", "Section 230" or "COVID 19", which are searches for a title, not a bill."""
+    if found_by_number:
+        return False
+    return bool(_bill_number_like.fullmatch(re.sub(r"[\s.-]", "", q).upper()))
 
 
 def _use_similarity_threshold(db: Session) -> None:
