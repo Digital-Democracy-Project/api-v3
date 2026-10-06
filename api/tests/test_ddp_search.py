@@ -490,6 +490,79 @@ def test_similarity_threshold_does_not_leak_to_the_pooled_connection(built, api)
         db.close()
 
 
+def _bill_with_look_alike_title(db):
+    """A bill whose TITLE resembles a bill number that does not exist, the way real procedural titles
+    ("Providing for consideration of the bill (H.R. 9999)") resemble numbers."""
+    _bill(db, "ak", 31, "SB 31", "Relating to HB 9999999 appropriations")
+
+
+def test_a_bill_number_that_does_not_exist_finds_nothing_not_look_alike_titles(built, api):
+    """OPEN-316: "HB 99999999" is well-formed but matches no bill; it fell through to the fuzzy title
+    match and returned bills whose titles share trigrams with it. A number is looked up as a number."""
+    _bill_with_look_alike_title(built)
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get("/ddp/search", params={"q": "HB 99999999", "jurisdiction": ["AK"]}).json()
+    assert (r["exact"], r["text"], r["names"]) == ([], [], [])
+
+
+def test_a_bill_number_that_exists_still_gets_title_matches_too(built, api):
+    """Only a number that matched nothing skips the title match: a number that exists behaves as before."""
+    _bill(built, "ak", 32, "SB 32", "Relating to HB 12 funding")
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get("/ddp/search", params={"q": "HB 12", "jurisdiction": ["AK"]}).json()
+    assert _ids(r["exact"]) == ["ocd-bill/t309-ak-12"]
+    assert "ocd-bill/t309-ak-32" in _ids(r["names"])
+
+
+def test_suggest_a_bill_number_prefix_with_no_match_suggests_no_look_alike_titles(built, api):
+    _bill_with_look_alike_title(built)
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get("/ddp/search/suggest", params={"q": "HB 99999", "jurisdiction": ["AK"]}).json()
+    assert [h for h in r["results"] if h["entity_type"] == "bill"] == []
+
+
+@pytest.mark.parametrize(
+    "q",
+    ["HB 99999999", "S 987654", "S1", "H 1", "H.R. 1", "H. R. 1", "H.J. Res. 1", "HB 1C", "HB-1", "hjres 12", "SB 2518E", "SPB 7042", "SD 50"],
+)
+def test_a_recognised_designator_then_digits_is_a_bill_number(q):
+    assert ddp_search._is_missing_bill_number(q, [])
+    assert not ddp_search._is_missing_bill_number(q, ["a hit"])  # found by number: title matching stays on
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        "school lunch", "school lu", "medicade expansion", "qqqq zzzz wwww", "HB", "smith 3rd grade",
+        "tax 2026 reform", "COVID 19", "COVID-19", "Title 42", "Section 230", "Article 5", "Prop 8", "U.S. 50",
+        "Chapter 11 bankruptcy", "HJR A", "H2O", "H 2 O", "S3D", "H.2.O",
+    ],
+)
+def test_anything_else_keeps_fuzzy_title_matching(q):
+    """Numbered topics and half-typed titles are searches for a title, not a bill: only a recognised
+    designator followed by digits counts as a number, so an unknown prefix fails safe."""
+    assert not ddp_search._is_missing_bill_number(q, [])
+
+
+@pytest.mark.parametrize("q", ["COVID 19", "Title 42", "Section 230", "Prop 8", "Article 5", "H2O"])
+def test_numbered_topic_titles_are_still_found_by_search_and_suggest(built, api, q):
+    """The reviewer's case: a bill titled for a numbered topic must come back for that query. None of these
+    is a bill number, so none may lose its title match."""
+    for n, title in enumerate(
+        ("COVID 19 Emergency Relief", "Title 42 Border Authority", "Section 230 Reform", "Prop 8 Repeal", "Article 5 Convention", "H2O Quality Standards"),
+        start=40,
+    ):
+        _bill(built, "ak", n, f"SB {n}", title)
+    assert api.post("/ddp/search/refresh").status_code == 200
+    wanted = {"COVID 19": 40, "Title 42": 41, "Section 230": 42, "Prop 8": 43, "Article 5": 44, "H2O": 45}[q]
+    assert f"ocd-bill/t309-ak-{wanted}" in _ids(
+        api.get("/ddp/search", params={"q": q, "jurisdiction": ["AK"]}).json()["names"]
+    )
+    assert f"ocd-bill/t309-ak-{wanted}" in _ids(
+        api.get("/ddp/search/suggest", params={"q": q, "jurisdiction": ["AK"]}).json()["results"]
+    )
+
+
 # --- suggest --------------------------------------------------------------------------------------
 
 

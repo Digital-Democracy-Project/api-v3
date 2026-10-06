@@ -281,6 +281,31 @@ def _validated_query(q: str, min_len: int, max_len: int) -> str:
     return q
 
 
+# The bill-type prefixes that exist in the data (surveyed over every projected bill, 2026-10-05): HB SB HR SR
+# S H, HRES SRES HJRES SJRES HCONRES SCONRES, HJR SJR HCR SCR HJ SJ HM SM HJM SJM HCM SCM, SD HD (MA),
+# SPB (FL). Longest first so "HCONRES" is not read as "H" + "CONRES". A prefix that is not here is NOT
+# treated as a bill number, which fails safe: such a query simply keeps its title matching. Only the
+# multi-letter designators may end in letters (FL special sessions: HB 1C): the single-letter H and S take
+# digits only (none of the 19,943 real H/S numbers has a letter suffix), so "H2O" is a topic, not bill H 2.
+_BILL_DESIGNATORS = (
+    "HCONRES", "SCONRES", "HJRES", "SJRES", "HRES", "SRES", "HJR", "SJR", "HCR", "SCR", "HJM", "SJM",
+    "HCM", "SCM", "SPB", "HB", "SB", "HR", "SR", "HM", "SM", "HJ", "SJ", "HD", "SD",
+)
+_bill_number_like = re.compile(r"(?:(?:%s)\d+[A-Z]{0,2}|[HS]\d+)" % "|".join(_BILL_DESIGNATORS))
+
+
+def _is_missing_bill_number(q: str, found_by_number: list) -> bool:
+    """True for a query that is a bill number (a recognised designator then digits, however it is spaced or
+    dotted: "HB 99999999", "H.J. Res. 1") whose number lookup found nothing. Such a query must find nothing,
+    not bills whose TITLES merely share trigrams with it (OPEN-316: "HB 99999999" returned three unrelated
+    bills at 0.5 to 0.57 word_similarity). A number that exists keeps its title matches, and anything that
+    is not a bill number keeps fuzzy title matching: "school lu" (type-ahead needs it) and numbered topics
+    such as "Title 42", "Section 230" or "COVID 19", which are searches for a title, not a bill."""
+    if found_by_number:
+        return False
+    return bool(_bill_number_like.fullmatch(re.sub(r"[\s.-]", "", q).upper()))
+
+
 def _use_similarity_threshold(db: Session) -> None:
     # is_local=true: applies to this transaction only, never leaks to the pooled connection.
     db.execute(
@@ -320,7 +345,7 @@ def search(
             exact = [_bill_hit(r) for r in db.execute(EXACT_SQL, params)]
         text_hits = [_bill_hit(r) for r in db.execute(FTS_SQL, params)]
     if len(q) >= 3:  # trigram matching is meaningless below three characters
-        if "bill" in wanted:
+        if "bill" in wanted and not _is_missing_bill_number(q, exact):
             names += [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
         if "person" in wanted:
             names += [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
@@ -354,7 +379,9 @@ def suggest(
     if _likely_bill_id.fullmatch(q):
         results += [_bill_hit(r) for r in db.execute(PREFIX_SQL, params)]
     if len(q) >= 3:
-        fuzzy = [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
+        fuzzy = []
+        if not _is_missing_bill_number(q, results):
+            fuzzy += [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
         fuzzy += [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
         fuzzy.sort(key=_rank)
         seen = {h["id"] for h in results}
