@@ -448,10 +448,36 @@ def test_suggest_puts_the_exact_number_first_then_longer_numbers(built, api):
     assert {"HB 10", "HB 12", "HB 100", "HB 123"} <= set(longer)
 
 
-def test_suggest_bill_number_order_is_deterministic(built, api):
-    params = {"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 10}
-    first = [h["id"] for h in api.get("/ddp/search/suggest", params=params).json()["results"]]
-    assert first == [h["id"] for h in api.get("/ddp/search/suggest", params=params).json()["results"]]
+def test_suggest_limit_keeps_the_exact_numbers_and_drops_newer_longer_ones(built, api):
+    """The ORDER BY inside the CTE decides which rows survive LIMIT. Two exact HB 1 (older) against four newer,
+    longer numbers, with limit 2: a date-only inner order would keep the newer ones and drop the exact bills
+    before any outer sort could rescue them."""
+    for n, identifier in enumerate(("HB 10", "HB 11", "HB 100", "HB 101"), start=210):
+        b = _bill(built, "ak", n, identifier, f"Newer bill {n}")
+        b.latest_action_date = "2026-06-01"
+        built.commit()
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get(
+        "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 2}
+    ).json()
+    assert [h["identifier"] for h in r["results"]] == ["HB 1", "HB 1"]
+
+
+def test_suggest_bill_number_ties_break_by_jurisdiction_whatever_order_they_are_asked_in(built, api):
+    """AK and WY each have an HB 1 with the same date and length: the order is the documented tie-break
+    (jurisdiction id), not whichever the planner scans first or the order the codes were given in."""
+    for order in (["AK", "WY"], ["WY", "AK"]):
+        r = api.get("/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": order, "limit": 10}).json()
+        assert [h["jurisdiction"] for h in r["results"][:2]] == ["AK", "WY"]
+
+
+def test_suggest_bill_hits_keep_the_public_shape(built, api):
+    """The CTE now carries identifier_norm and norm_len for ordering; neither may leak into the response."""
+    hit = api.get("/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK"]}).json()["results"][0]
+    assert set(hit) == {
+        "entity_type", "id", "identifier", "title", "jurisdiction", "jurisdiction_name", "session",
+        "chamber", "latest_action_date", "latest_action_description", "snippet", "score",
+    }
 
 
 def test_suggest_prefers_a_name_and_does_not_repeat_ids(built, api):
