@@ -425,10 +425,33 @@ def test_suggest_bill_number_prefix_first_then_names(built, api):
     r = api.get(
         "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK"]}
     ).json()
-    assert [h["identifier"] for h in r["results"][:2]] == ["HB 12", "HB 1"] or {
-        h["identifier"] for h in r["results"][:2]
-    } == {"HB 1", "HB 12"}
+    assert [h["identifier"] for h in r["results"][:2]] == ["HB 1", "HB 12"]
     assert all(h["entity_type"] == "bill" for h in r["results"][:2])
+
+
+def test_suggest_puts_the_exact_number_first_then_longer_numbers(built, api):
+    """OPEN-316: "HB 1" listed HB 116, HB 147 ... and buried the bills numbered exactly HB 1, because the
+    prefix lookup ordered by latest action date. Every number added here is newer than the exact ones, so a
+    date-only order would put them first."""
+    for n, identifier, code in ((200, "HB 10", "ak"), (201, "HB 100", "ak"), (202, "HB 123", "wy")):
+        b = _bill(built, code, n, identifier, f"Newer bill {n}")
+        b.latest_action_date = "2026-06-01"
+        built.commit()
+    assert api.post("/ddp/search/refresh").status_code == 200
+    r = api.get(
+        "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 10}
+    ).json()
+    ids = [h["identifier"] for h in r["results"] if h["entity_type"] == "bill"]
+    assert ids[:2] == ["HB 1", "HB 1"]  # the exact number in both jurisdictions, before anything longer
+    longer = ids[2:]
+    assert sorted(longer, key=len) == longer  # then shorter numbers before longer ones
+    assert {"HB 10", "HB 12", "HB 100", "HB 123"} <= set(longer)
+
+
+def test_suggest_bill_number_order_is_deterministic(built, api):
+    params = {"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 10}
+    first = [h["id"] for h in api.get("/ddp/search/suggest", params=params).json()["results"]]
+    assert first == [h["id"] for h in api.get("/ddp/search/suggest", params=params).json()["results"]]
 
 
 def test_suggest_prefers_a_name_and_does_not_repeat_ids(built, api):

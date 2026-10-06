@@ -147,17 +147,27 @@ SAMPLE_SQL = text(
 """
 )
 
+# Type-ahead order for a typed bill number (OPEN-316): shorter numbers first, so the bills numbered exactly
+# what was typed come before longer ones ("HB 1" before HB 10 before HB 116: every match starts with the
+# typed text, so the exact number is always the shortest), newest action first within a length, and
+# last-resort keys so the order never depends on how Postgres happens to scan. It is applied inside the
+# CTE (to pick the rows that survive LIMIT) and again on the way out, because the order of a CTE's rows is
+# not part of its contract.
 PREFIX_SQL = text(
     f"""
     WITH hits AS (
-        SELECT {_BILL_COLUMNS}, 1.0::float AS score
+        SELECT {_BILL_COLUMNS}, 1.0::float AS score, s.identifier_norm,
+               length(s.identifier_norm) AS norm_len
         FROM ddp_bill_search s
         WHERE s.identifier_norm LIKE upper(regexp_replace(:q, '[\\s-]', '', 'g')) || '%'
           AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
-        ORDER BY s.latest_action_date DESC NULLS LAST, s.identifier_norm
+        ORDER BY norm_len, s.latest_action_date DESC NULLS LAST,
+                 s.identifier_norm, s.jurisdiction_id, s.bill_id
         LIMIT :limit
     )
     SELECT hits.*, NULL::text AS snippet FROM hits
+    ORDER BY hits.norm_len, hits.latest_action_date DESC NULLS LAST,
+             hits.identifier_norm, hits.jurisdiction_id, hits.bill_id
 """
 )
 
