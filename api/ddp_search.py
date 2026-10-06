@@ -187,8 +187,10 @@ PEOPLE_SQL = text(
 # "Adam Smith" and falls under the 0.5 threshold above (measured 2026-10-05 on the 4,651 current legislators:
 # a lowered threshold finds it only at 0.3, where ordinary words such as "budget" and "housing" start returning
 # legislators, 5 of 33 non-name queries at 0.5 against 27 of 33 at 0.3). So the transposed spellings of a one-word
-# query are also matched EXACTLY against surnames: no noise is possible, because a hit must be a real surname
-# that is the typed word with two adjacent letters swapped. Aliases count, as in PEOPLE_SQL.
+# query are also matched EXACTLY against surnames: every hit is a real surname that is the typed word with two
+# adjacent letters swapped, which no loose similarity can produce (an ordinary word that happens to be one swap
+# away from a surname would still match; none of 33 sampled non-name queries did). Aliases count, as in
+# PEOPLE_SQL. The comparison is on lower() in the database, so a non-ASCII surname needs a UTF-8 database.
 PEOPLE_TRANSPOSED_SQL = text(
     r"""
     WITH names AS (
@@ -282,8 +284,10 @@ def _person_hit(row) -> dict:
 
 def _people_hits(db: Session, params: dict) -> List[dict]:
     """People for the query: the trigram matches, then (OPEN-326) anyone whose surname is the typed word with two
-    adjacent letters swapped. A transposition hit is scored at exactly the threshold, the least a hit can score,
-    so it sits below any direct match; a person found both ways appears once, with the trigram hit."""
+    adjacent letters swapped. A transposition hit is scored at exactly the threshold, the least a hit can score
+    (`<%` is inclusive, so a trigram hit can score the same), so it sits below any stronger direct match and
+    `_rank` settles a tie. A person found both ways appears once, with the trigram hit. Each query is limited
+    separately, so this can return up to twice `limit`: the callers sort the merged list and cut it to `limit`."""
     hits = [_person_hit(r) for r in db.execute(PEOPLE_SQL, params)]
     variants = _transposed_spellings(params["q"])
     if variants:

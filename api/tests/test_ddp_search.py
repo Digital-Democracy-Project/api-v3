@@ -357,6 +357,31 @@ def test_the_surname_is_taken_without_a_generational_suffix(built, api):
     assert _ids(_people(api, "Garica")) == ["ocd-person/t309-ak-9"]
 
 
+def test_many_people_sharing_the_corrected_surname_are_capped_at_the_limit_in_name_order(built, api):
+    for n, first in enumerate(("Ana", "Ben", "Cy", "Di")):
+        _person(built, "ak", 20 + n, f"{first} Garcia")
+    expected = ["ocd-person/t309-ak-20", "ocd-person/t309-ak-21"]  # equal scores: _rank orders by name
+    r = api.get("/ddp/search", params={"q": "Garica", "jurisdiction": ["AK"], "types": ["person"], "limit": 2})
+    assert _ids(r.json()["names"]) == expected
+    r = api.get("/ddp/search/suggest", params={"q": "Garica", "jurisdiction": ["AK"], "limit": 2})
+    assert _ids(r.json()["results"]) == expected
+
+
+def test_a_surname_is_found_through_an_alias(built, api):
+    """The swap is in the middle of a short surname, which the trigram match cannot reach ("smtih" scores 0.33),
+    and the surname is only in the alias, so only the transposition query's alias rows can find it."""
+    _person(built, "ak", 30, "Wilhelmina Ortega", aliases=["Willie Smith"])
+    assert _ids(_people(api, "Smtih")) == ["ocd-person/t309-ak-30"]
+
+
+def test_an_accented_surname_typed_with_its_accent_is_found(built):
+    """Called below the HTTP layer on purpose: starlette 0.21's TestClient mangles a non-ASCII query string
+    (a real uvicorn decodes it correctly), so this pins the SQL: Python's lower() and the database's agree."""
+    _person(built, "ak", 31, "Beatriz \u00c1lvarez")
+    params = {"q": "\u00c1lvraez", "jids": [JIDS["ak"]], "limit": 8}
+    assert [h["id"] for h in ddp_search._people_hits(built, params)] == ["ocd-person/t309-ak-31"]
+
+
 def test_a_transposed_word_that_is_no_surname_returns_nobody(built, api):
     assert _people(api, "Budegt") == []
 
