@@ -860,7 +860,10 @@ def create_test_bills_with_archived_versions(session, chamber):
     # either latest or previous, so under the pre-fix code it gets no archived text attached
     # at all.
     stage_divergence_committee_sub_version = BillVersion(
-        bill=stage_divergence_bill, note="Committee Substitute", date="", classification=""
+        bill=stage_divergence_bill,
+        note="Committee Substitute",
+        date="",
+        classification="",
     )
     stage_divergence_committee_sub_link = BillVersionLink(
         version=stage_divergence_committee_sub_version,
@@ -910,7 +913,10 @@ def create_test_bills_with_archived_versions(session, chamber):
         latest_action_date="2026-03-01",
     )
     unclassifiable_introduced_version = BillVersion(
-        bill=unclassifiable_bill, note="Introduced", date="2026-01-01", classification=""
+        bill=unclassifiable_bill,
+        note="Introduced",
+        date="2026-01-01",
+        classification="",
     )
     unclassifiable_introduced_link = BillVersionLink(
         version=unclassifiable_introduced_version,

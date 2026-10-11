@@ -321,8 +321,12 @@ def shapes(built, api):
     "identifier,query",
     [(i, q) for i, queries in _SHAPES for q in queries],
 )
-def test_search_exact_finds_every_surveyed_bill_number_shape(shapes, api, identifier, query):
-    hits = api.get("/ddp/search", params={"q": query, "jurisdiction": ["AK"]}).json()["exact"]
+def test_search_exact_finds_every_surveyed_bill_number_shape(
+    shapes, api, identifier, query
+):
+    hits = api.get("/ddp/search", params={"q": query, "jurisdiction": ["AK"]}).json()[
+        "exact"
+    ]
     assert [h["identifier"] for h in hits] == [identifier]
 
 
@@ -330,15 +334,32 @@ def test_search_exact_finds_every_surveyed_bill_number_shape(shapes, api, identi
     "identifier,query",
     [(i, q) for i, queries in _SHAPES for q in queries],
 )
-def test_suggest_finds_every_surveyed_bill_number_shape_too(shapes, api, identifier, query):
+def test_suggest_finds_every_surveyed_bill_number_shape_too(
+    shapes, api, identifier, query
+):
     """suggest depends on the same gate and the same normalisation through its own PREFIX_SQL."""
-    r = api.get("/ddp/search/suggest", params={"q": query, "jurisdiction": ["AK"]}).json()
+    r = api.get(
+        "/ddp/search/suggest", params={"q": query, "jurisdiction": ["AK"]}
+    ).json()
     assert identifier in [h["identifier"] for h in r["results"]]
 
 
 @pytest.mark.parametrize(
     "q",
-    ["HB 1", "HB 12", "SB 2518", "HB 5403E", "HCONRES 135", "H.R. 1", "H. R. 1", "H.J. Res. 1", "S.J.Res. 9", "HJR A", "HB-1C", "hb1c"],
+    [
+        "HB 1",
+        "HB 12",
+        "SB 2518",
+        "HB 5403E",
+        "HCONRES 135",
+        "H.R. 1",
+        "H. R. 1",
+        "H.J. Res. 1",
+        "S.J.Res. 9",
+        "HJR A",
+        "HB-1C",
+        "hb1c",
+    ],
 )
 def test_the_bill_number_gate_accepts_real_shapes(q):
     assert ddp_search._likely_bill_id.fullmatch(q)
@@ -346,7 +367,16 @@ def test_the_bill_number_gate_accepts_real_shapes(q):
 
 @pytest.mark.parametrize(
     "q",
-    ["school lunch", "medicaid expansion", "qqqq zzzz wwww", "HB", "a", "H", "tax cut now", "hello world 12345678"],
+    [
+        "school lunch",
+        "medicaid expansion",
+        "qqqq zzzz wwww",
+        "HB",
+        "a",
+        "H",
+        "tax cut now",
+        "hello world 12345678",
+    ],
 )
 def test_the_bill_number_gate_rejects_ordinary_queries(q):
     assert not ddp_search._likely_bill_id.fullmatch(q)
@@ -407,22 +437,31 @@ def _people(api, q, jurisdictions=("AK",), path="/ddp/search"):
 
 
 def test_search_finds_a_surname_typed_with_two_letters_swapped(built, api):
-    """"Whtifield" scores under the 0.5 word_similarity threshold against "Nancy Whitfield", so the trigram
+    """ "Whtifield" scores under the 0.5 word_similarity threshold against "Nancy Whitfield", so the trigram
     match alone returns nobody; the transposed spelling "whitfield" is matched exactly against surnames."""
     hits = _people(api, "Whtifield")
     assert _ids(hits) == ["ocd-person/t309-ak-2"]
-    assert hits[0]["name"] == "Nancy Whitfield" and hits[0]["score"] == ddp_search.TRANSPOSED_SURNAME_SCORE
+    assert (
+        hits[0]["name"] == "Nancy Whitfield"
+        and hits[0]["score"] == ddp_search.TRANSPOSED_SURNAME_SCORE
+    )
 
 
-def test_a_transposition_hit_appears_once_when_the_trigram_match_also_finds_the_person(built, api):
+def test_a_transposition_hit_appears_once_when_the_trigram_match_also_finds_the_person(
+    built, api
+):
     hits = _people(api, "Smithsno")
     assert _ids(hits) == ["ocd-person/t309-ak-1"]
-    assert hits[0]["score"] >= ddp_search.TRANSPOSED_SURNAME_SCORE  # the higher of the two, not the trigram's
+    assert (
+        hits[0]["score"] >= ddp_search.TRANSPOSED_SURNAME_SCORE
+    )  # the higher of the two, not the trigram's
 
 
 def test_suggest_finds_a_surname_typed_with_two_letters_swapped(built, api):
     hits = _people(api, "Whtifield", path="/ddp/search/suggest")
-    assert [h["id"] for h in hits if h["entity_type"] == "person"] == ["ocd-person/t309-ak-2"]
+    assert [h["id"] for h in hits if h["entity_type"] == "person"] == [
+        "ocd-person/t309-ak-2"
+    ]
 
 
 def test_the_surname_is_taken_without_a_generational_suffix(built, api):
@@ -430,27 +469,47 @@ def test_the_surname_is_taken_without_a_generational_suffix(built, api):
     assert _ids(_people(api, "Garica")) == ["ocd-person/t309-ak-9"]
 
 
-def test_many_people_sharing_the_corrected_surname_are_capped_at_the_limit_in_name_order(built, api):
+def test_many_people_sharing_the_corrected_surname_are_capped_at_the_limit_in_name_order(
+    built, api
+):
     for n, first in enumerate(("Ana", "Ben", "Cy", "Di")):
         _person(built, "ak", 20 + n, f"{first} Garcia")
-    expected = ["ocd-person/t309-ak-20", "ocd-person/t309-ak-21"]  # equal scores: _rank orders by name
-    r = api.get("/ddp/search", params={"q": "Garica", "jurisdiction": ["AK"], "types": ["person"], "limit": 2})
+    expected = [
+        "ocd-person/t309-ak-20",
+        "ocd-person/t309-ak-21",
+    ]  # equal scores: _rank orders by name
+    r = api.get(
+        "/ddp/search",
+        params={"q": "Garica", "jurisdiction": ["AK"], "types": ["person"], "limit": 2},
+    )
     assert _ids(r.json()["names"]) == expected
-    r = api.get("/ddp/search/suggest", params={"q": "Garica", "jurisdiction": ["AK"], "limit": 2})
+    r = api.get(
+        "/ddp/search/suggest",
+        params={"q": "Garica", "jurisdiction": ["AK"], "limit": 2},
+    )
     assert _ids(r.json()["results"]) == expected
 
 
-def test_a_transposed_surname_outranks_bills_that_only_share_trigrams_with_the_typo(built, api):
+def test_a_transposed_surname_outranks_bills_that_only_share_trigrams_with_the_typo(
+    built, api
+):
     """OPEN-326, the "Garica" case: bills whose titles merely resemble the typo score above the bare 0.5 a
     transposition hit used to carry, so suggest's cut of 8 showed bills and no Garcia."""
     _person(built, "ak", 40, "Ana Garcia")
     for n in range(10):
-        _bill(built, "ak", 60 + n, f"HB {60 + n}", f"America Grows Act of {2026 + n}")  # word_similarity 0.57 to "garica"
+        _bill(
+            built, "ak", 60 + n, f"HB {60 + n}", f"America Grows Act of {2026 + n}"
+        )  # word_similarity 0.57 to "garica"
     assert api.post("/ddp/search/refresh").status_code == 200
-    r = api.get("/ddp/search/suggest", params={"q": "Garica", "jurisdiction": ["AK"], "limit": 8}).json()["results"]
+    r = api.get(
+        "/ddp/search/suggest",
+        params={"q": "Garica", "jurisdiction": ["AK"], "limit": 8},
+    ).json()["results"]
     assert r[0]["id"] == "ocd-person/t309-ak-40"
     weak = [h for h in r if h["entity_type"] == "bill"]
-    assert weak and all(0.5 <= h["score"] < ddp_search.TRANSPOSED_SURNAME_SCORE for h in weak)  # the bills were real rivals
+    assert weak and all(
+        0.5 <= h["score"] < ddp_search.TRANSPOSED_SURNAME_SCORE for h in weak
+    )  # the bills were real rivals
     body = api.get("/ddp/search", params={"q": "Garica", "jurisdiction": ["AK"]}).json()
     assert body["names"][0]["id"] == "ocd-person/t309-ak-40"
 
@@ -466,11 +525,14 @@ def test_a_name_typed_correctly_still_beats_a_transposition_hit(built, api):
 
 
 def test_only_the_last_word_of_a_name_counts_as_the_surname(built, api):
-    """"Garcia" as a first or middle name is not a Garcia: the surname is the last word, before any suffix."""
+    """ "Garcia" as a first or middle name is not a Garcia: the surname is the last word, before any suffix."""
     _person(built, "ak", 43, "Garcia Lopez")
     _person(built, "ak", 44, "Rosa Garcia Lopez")
     assert _people(api, "Garica") == []
-    assert _ids(_people(api, "Lpoez")) == ["ocd-person/t309-ak-43", "ocd-person/t309-ak-44"]  # the last word does match
+    assert _ids(_people(api, "Lpoez")) == [
+        "ocd-person/t309-ak-43",
+        "ocd-person/t309-ak-44",
+    ]  # the last word does match
 
 
 def test_the_transposition_query_is_limited_in_sql(built):
@@ -478,7 +540,12 @@ def test_the_transposition_query_is_limited_in_sql(built):
         _person(built, "ak", 50 + n, f"Person{n} Garcia")
     rows = built.execute(
         ddp_search.PEOPLE_TRANSPOSED_SQL,
-        {"jids": [JIDS["ak"]], "pattern": ddp_search._surname_pattern(["garcia"]), "score": 0.9, "limit": 2},
+        {
+            "jids": [JIDS["ak"]],
+            "pattern": ddp_search._surname_pattern(["garcia"]),
+            "score": 0.9,
+            "limit": 2,
+        },
     ).fetchall()
     assert len(rows) == 2  # the callers cut to the limit anyway; this bounds the work
 
@@ -495,7 +562,9 @@ def test_an_accented_surname_typed_with_its_accent_is_found(built):
     (a real uvicorn decodes it correctly), so this pins the SQL: Python's lower() and the database's agree."""
     _person(built, "ak", 31, "Beatriz \u00c1lvarez")
     params = {"q": "\u00c1lvraez", "jids": [JIDS["ak"]], "limit": 8}
-    assert [h["id"] for h in ddp_search._people_hits(built, params)] == ["ocd-person/t309-ak-31"]
+    assert [h["id"] for h in ddp_search._people_hits(built, params)] == [
+        "ocd-person/t309-ak-31"
+    ]
 
 
 def test_a_transposed_word_that_is_no_surname_returns_nobody(built, api):
@@ -509,9 +578,22 @@ def test_transposition_matches_stay_inside_the_requested_jurisdictions(built, ap
 
 def test_transposed_spellings_are_only_made_for_one_alphabetic_word():
     assert "smith" in ddp_search._transposed_spellings("Smtih")
-    assert ddp_search._transposed_spellings("Smtih") == sorted(set(ddp_search._transposed_spellings("smtih")))
-    assert "aabb" not in ddp_search._transposed_spellings("aabb")  # equal neighbours swap to the same word
-    for not_a_word in ("abc", "Nancy Whtifield", "O'Brien", "Smith-Jones", "ab12", "1234", "x" * 31, ""):
+    assert ddp_search._transposed_spellings("Smtih") == sorted(
+        set(ddp_search._transposed_spellings("smtih"))
+    )
+    assert "aabb" not in ddp_search._transposed_spellings(
+        "aabb"
+    )  # equal neighbours swap to the same word
+    for not_a_word in (
+        "abc",
+        "Nancy Whtifield",
+        "O'Brien",
+        "Smith-Jones",
+        "ab12",
+        "1234",
+        "x" * 31,
+        "",
+    ):
         assert ddp_search._transposed_spellings(not_a_word) == [], not_a_word
 
 
@@ -616,12 +698,16 @@ def _bill_with_look_alike_title(db):
     _bill(db, "ak", 31, "SB 31", "Relating to HB 9999999 appropriations")
 
 
-def test_a_bill_number_that_does_not_exist_finds_nothing_not_look_alike_titles(built, api):
+def test_a_bill_number_that_does_not_exist_finds_nothing_not_look_alike_titles(
+    built, api
+):
     """OPEN-316: "HB 99999999" is well-formed but matches no bill; it fell through to the fuzzy title
     match and returned bills whose titles share trigrams with it. A number is looked up as a number."""
     _bill_with_look_alike_title(built)
     assert api.post("/ddp/search/refresh").status_code == 200
-    r = api.get("/ddp/search", params={"q": "HB 99999999", "jurisdiction": ["AK"]}).json()
+    r = api.get(
+        "/ddp/search", params={"q": "HB 99999999", "jurisdiction": ["AK"]}
+    ).json()
     assert (r["exact"], r["text"], r["names"]) == ([], [], [])
 
 
@@ -634,28 +720,65 @@ def test_a_bill_number_that_exists_still_gets_title_matches_too(built, api):
     assert "ocd-bill/t309-ak-32" in _ids(r["names"])
 
 
-def test_suggest_a_bill_number_prefix_with_no_match_suggests_no_look_alike_titles(built, api):
+def test_suggest_a_bill_number_prefix_with_no_match_suggests_no_look_alike_titles(
+    built, api
+):
     _bill_with_look_alike_title(built)
     assert api.post("/ddp/search/refresh").status_code == 200
-    r = api.get("/ddp/search/suggest", params={"q": "HB 99999", "jurisdiction": ["AK"]}).json()
+    r = api.get(
+        "/ddp/search/suggest", params={"q": "HB 99999", "jurisdiction": ["AK"]}
+    ).json()
     assert [h for h in r["results"] if h["entity_type"] == "bill"] == []
 
 
 @pytest.mark.parametrize(
     "q",
-    ["HB 99999999", "S 987654", "S1", "H 1", "H.R. 1", "H. R. 1", "H.J. Res. 1", "HB 1C", "HB-1", "hjres 12", "SB 2518E", "SPB 7042", "SD 50"],
+    [
+        "HB 99999999",
+        "S 987654",
+        "S1",
+        "H 1",
+        "H.R. 1",
+        "H. R. 1",
+        "H.J. Res. 1",
+        "HB 1C",
+        "HB-1",
+        "hjres 12",
+        "SB 2518E",
+        "SPB 7042",
+        "SD 50",
+    ],
 )
 def test_a_recognised_designator_then_digits_is_a_bill_number(q):
     assert ddp_search._is_missing_bill_number(q, [])
-    assert not ddp_search._is_missing_bill_number(q, ["a hit"])  # found by number: title matching stays on
+    assert not ddp_search._is_missing_bill_number(
+        q, ["a hit"]
+    )  # found by number: title matching stays on
 
 
 @pytest.mark.parametrize(
     "q",
     [
-        "school lunch", "school lu", "medicade expansion", "qqqq zzzz wwww", "HB", "smith 3rd grade",
-        "tax 2026 reform", "COVID 19", "COVID-19", "Title 42", "Section 230", "Article 5", "Prop 8", "U.S. 50",
-        "Chapter 11 bankruptcy", "HJR A", "H2O", "H 2 O", "S3D", "H.2.O",
+        "school lunch",
+        "school lu",
+        "medicade expansion",
+        "qqqq zzzz wwww",
+        "HB",
+        "smith 3rd grade",
+        "tax 2026 reform",
+        "COVID 19",
+        "COVID-19",
+        "Title 42",
+        "Section 230",
+        "Article 5",
+        "Prop 8",
+        "U.S. 50",
+        "Chapter 11 bankruptcy",
+        "HJR A",
+        "H2O",
+        "H 2 O",
+        "S3D",
+        "H.2.O",
     ],
 )
 def test_anything_else_keeps_fuzzy_title_matching(q):
@@ -664,22 +787,40 @@ def test_anything_else_keeps_fuzzy_title_matching(q):
     assert not ddp_search._is_missing_bill_number(q, [])
 
 
-@pytest.mark.parametrize("q", ["COVID 19", "Title 42", "Section 230", "Prop 8", "Article 5", "H2O"])
+@pytest.mark.parametrize(
+    "q", ["COVID 19", "Title 42", "Section 230", "Prop 8", "Article 5", "H2O"]
+)
 def test_numbered_topic_titles_are_still_found_by_search_and_suggest(built, api, q):
     """The reviewer's case: a bill titled for a numbered topic must come back for that query. None of these
     is a bill number, so none may lose its title match."""
     for n, title in enumerate(
-        ("COVID 19 Emergency Relief", "Title 42 Border Authority", "Section 230 Reform", "Prop 8 Repeal", "Article 5 Convention", "H2O Quality Standards"),
+        (
+            "COVID 19 Emergency Relief",
+            "Title 42 Border Authority",
+            "Section 230 Reform",
+            "Prop 8 Repeal",
+            "Article 5 Convention",
+            "H2O Quality Standards",
+        ),
         start=40,
     ):
         _bill(built, "ak", n, f"SB {n}", title)
     assert api.post("/ddp/search/refresh").status_code == 200
-    wanted = {"COVID 19": 40, "Title 42": 41, "Section 230": 42, "Prop 8": 43, "Article 5": 44, "H2O": 45}[q]
+    wanted = {
+        "COVID 19": 40,
+        "Title 42": 41,
+        "Section 230": 42,
+        "Prop 8": 43,
+        "Article 5": 44,
+        "H2O": 45,
+    }[q]
     assert f"ocd-bill/t309-ak-{wanted}" in _ids(
         api.get("/ddp/search", params={"q": q, "jurisdiction": ["AK"]}).json()["names"]
     )
     assert f"ocd-bill/t309-ak-{wanted}" in _ids(
-        api.get("/ddp/search/suggest", params={"q": q, "jurisdiction": ["AK"]}).json()["results"]
+        api.get("/ddp/search/suggest", params={"q": q, "jurisdiction": ["AK"]}).json()[
+            "results"
+        ]
     )
 
 
@@ -698,16 +839,24 @@ def test_suggest_puts_the_exact_number_first_then_longer_numbers(built, api):
     """OPEN-316: "HB 1" listed HB 116, HB 147 ... and buried the bills numbered exactly HB 1, because the
     prefix lookup ordered by latest action date. Every number added here is newer than the exact ones, so a
     date-only order would put them first."""
-    for n, identifier, code in ((200, "HB 10", "ak"), (201, "HB 100", "ak"), (202, "HB 123", "wy")):
+    for n, identifier, code in (
+        (200, "HB 10", "ak"),
+        (201, "HB 100", "ak"),
+        (202, "HB 123", "wy"),
+    ):
         b = _bill(built, code, n, identifier, f"Newer bill {n}")
         b.latest_action_date = "2026-06-01"
         built.commit()
     assert api.post("/ddp/search/refresh").status_code == 200
     r = api.get(
-        "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 10}
+        "/ddp/search/suggest",
+        params={"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 10},
     ).json()
     ids = [h["identifier"] for h in r["results"] if h["entity_type"] == "bill"]
-    assert ids[:2] == ["HB 1", "HB 1"]  # the exact number in both jurisdictions, before anything longer
+    assert ids[:2] == [
+        "HB 1",
+        "HB 1",
+    ]  # the exact number in both jurisdictions, before anything longer
     longer = ids[2:]
     assert sorted(longer, key=len) == longer  # then shorter numbers before longer ones
     assert {"HB 10", "HB 12", "HB 100", "HB 123"} <= set(longer)
@@ -723,25 +872,43 @@ def test_suggest_limit_keeps_the_exact_numbers_and_drops_newer_longer_ones(built
         built.commit()
     assert api.post("/ddp/search/refresh").status_code == 200
     r = api.get(
-        "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 2}
+        "/ddp/search/suggest",
+        params={"q": "HB 1", "jurisdiction": ["AK", "WY"], "limit": 2},
     ).json()
     assert [h["identifier"] for h in r["results"]] == ["HB 1", "HB 1"]
 
 
-def test_suggest_bill_number_ties_break_by_jurisdiction_whatever_order_they_are_asked_in(built, api):
+def test_suggest_bill_number_ties_break_by_jurisdiction_whatever_order_they_are_asked_in(
+    built, api
+):
     """AK and WY each have an HB 1 with the same date and length: the order is the documented tie-break
     (jurisdiction id), not whichever the planner scans first or the order the codes were given in."""
     for order in (["AK", "WY"], ["WY", "AK"]):
-        r = api.get("/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": order, "limit": 10}).json()
+        r = api.get(
+            "/ddp/search/suggest",
+            params={"q": "HB 1", "jurisdiction": order, "limit": 10},
+        ).json()
         assert [h["jurisdiction"] for h in r["results"][:2]] == ["AK", "WY"]
 
 
 def test_suggest_bill_hits_keep_the_public_shape(built, api):
     """The CTE now carries identifier_norm and norm_len for ordering; neither may leak into the response."""
-    hit = api.get("/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK"]}).json()["results"][0]
+    hit = api.get(
+        "/ddp/search/suggest", params={"q": "HB 1", "jurisdiction": ["AK"]}
+    ).json()["results"][0]
     assert set(hit) == {
-        "entity_type", "id", "identifier", "title", "jurisdiction", "jurisdiction_name", "session",
-        "chamber", "latest_action_date", "latest_action_description", "snippet", "score",
+        "entity_type",
+        "id",
+        "identifier",
+        "title",
+        "jurisdiction",
+        "jurisdiction_name",
+        "session",
+        "chamber",
+        "latest_action_date",
+        "latest_action_description",
+        "snippet",
+        "score",
     }
 
 

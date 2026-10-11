@@ -114,10 +114,10 @@ def test_bills_filter_by_document_updated_since(client):
     # unarchived_bill has no BillVersionDocument row at all -- must not match.
     assert "ocd-bill/unarchived-0002" not in {b["id"] for b in results}
 
-    response = client.get("/bills?jurisdiction=oh&document_updated_since=2032-01-01T00:00:00")
-    assert "ocd-bill/archived-0001" not in {
-        b["id"] for b in response.json()["results"]
-    }
+    response = client.get(
+        "/bills?jurisdiction=oh&document_updated_since=2032-01-01T00:00:00"
+    )
+    assert "ocd-bill/archived-0001" not in {b["id"] for b in response.json()["results"]}
 
 
 def test_bills_filter_by_created_since(client):
@@ -546,12 +546,18 @@ def test_bill_detail_changelog_shape_latest_diff_and_previous_raw_text(client):
     by_note = {v["note"]: v for v in response["versions"]}
 
     latest = by_note["Engrossed"]
-    assert latest["links"][0]["raw_text"] == "AN ACT relating to frogs (engrossed version)."
+    assert (
+        latest["links"][0]["raw_text"]
+        == "AN ACT relating to frogs (engrossed version)."
+    )
     assert "Introduced" in latest["diff_from_previous_version"]
     assert "Engrossed" in latest["diff_from_previous_version"]
 
     previous = by_note["Introduced"]
-    assert previous["links"][0]["raw_text"] == "AN ACT relating to frogs (introduced version)."
+    assert (
+        previous["links"][0]["raw_text"]
+        == "AN ACT relating to frogs (introduced version)."
+    )
     assert "diff_from_previous_version" not in previous
 
 
@@ -595,7 +601,9 @@ def test_bill_detail_latest_version_resolved_via_stage_not_alphabetical_order(cl
     by_note = {v["note"]: v for v in response["versions"]}
 
     latest = by_note["Enrolled"]
-    assert latest["links"][0]["raw_text"] == "AN ACT relating to toads (enrolled version)."
+    assert (
+        latest["links"][0]["raw_text"] == "AN ACT relating to toads (enrolled version)."
+    )
     assert "Committee Substitute" in latest["diff_from_previous_version"]
     assert "Enrolled" in latest["diff_from_previous_version"]
 
@@ -612,7 +620,8 @@ def test_bill_detail_latest_version_resolved_via_stage_not_alphabetical_order(cl
     # stays absent, since it's the first version ever archived for this bill.
     earliest = by_note["Introduced"]
     assert (
-        earliest["links"][0]["raw_text"] == "AN ACT relating to toads (introduced version)."
+        earliest["links"][0]["raw_text"]
+        == "AN ACT relating to toads (introduced version)."
     )
     assert "diff_from_previous_version" not in earliest
 
@@ -647,15 +656,22 @@ def test_bill_detail_unclassifiable_version_excluded_from_middle_of_lineage(clie
 
     introduced = by_note["Introduced"]
     assert (
-        introduced["links"][0]["raw_text"] == "AN ACT relating to newts (introduced version)."
+        introduced["links"][0]["raw_text"]
+        == "AN ACT relating to newts (introduced version)."
     )
     assert "diff_from_previous_version" not in introduced
 
     enrolled = by_note["Enrolled"]
-    assert enrolled["links"][0]["raw_text"] == "AN ACT relating to newts (enrolled version)."
+    assert (
+        enrolled["links"][0]["raw_text"]
+        == "AN ACT relating to newts (enrolled version)."
+    )
     assert "Introduced" in enrolled["diff_from_previous_version"]
     assert "Enrolled" in enrolled["diff_from_previous_version"]
-    assert "Some Never-Before-Seen Document Type" not in enrolled["diff_from_previous_version"]
+    assert (
+        "Some Never-Before-Seen Document Type"
+        not in enrolled["diff_from_previous_version"]
+    )
 
     # The unclassifiable version is excluded from the classifiable ordering entirely, so it
     # stays in its original relative position (first, per postprocess_includes's
