@@ -50,7 +50,9 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 # I/O once a slot is available. Without a bounded client config here, a slow/hung Secrets
 # Manager call could block a connection attempt (and, transitively, whatever pool-exhaustion
 # symptoms that causes) far longer than this app's own request-handling timeouts expect.
-_SECRETSMANAGER_CLIENT_CONFIG = Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 2})
+_SECRETSMANAGER_CLIENT_CONFIG = Config(
+    connect_timeout=3, read_timeout=5, retries={"max_attempts": 2}
+)
 
 
 def resolve_rds_credentials(secretsmanager_client=None) -> tuple[dict | None, str]:
@@ -66,11 +68,16 @@ def resolve_rds_credentials(secretsmanager_client=None) -> tuple[dict | None, st
     unset and get a real boto3 client.
     """
     if not RDS_CREDENTIALS_SECRET_ARN:
-        return None, "RDS_CREDENTIALS_SECRET_ARN not set -- refusing to guess which secret to read"
+        return (
+            None,
+            "RDS_CREDENTIALS_SECRET_ARN not set -- refusing to guess which secret to read",
+        )
 
     try:
         client = secretsmanager_client or boto3.client(
-            "secretsmanager", region_name=AWS_REGION, config=_SECRETSMANAGER_CLIENT_CONFIG
+            "secretsmanager",
+            region_name=AWS_REGION,
+            config=_SECRETSMANAGER_CLIENT_CONFIG,
         )
         response = client.get_secret_value(SecretId=RDS_CREDENTIALS_SECRET_ARN)
     except Exception as e:  # noqa: BLE001 -- any boto3/network failure is equally "can't proceed"

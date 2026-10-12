@@ -250,7 +250,9 @@ def _surname_pattern(variants: List[str]) -> str:
     return r"(^|\s)(" + "|".join(variants) + r")(,?\s+(jr|sr|ii|iii|iv|md)\.?)?\s*$"
 
 
-_ONE_WORD = re.compile(r"[^\W\d_]{4,30}")  # letters only (accents allowed): one word, 4 to 30 letters
+_ONE_WORD = re.compile(
+    r"[^\W\d_]{4,30}"
+)  # letters only (accents allowed): one word, 4 to 30 letters
 
 
 def _transposed_spellings(q: str) -> List[str]:
@@ -261,7 +263,11 @@ def _transposed_spellings(q: str) -> List[str]:
     if not _ONE_WORD.fullmatch(word):
         return []
     return sorted(
-        {word[:i] + word[i + 1] + word[i] + word[i + 2 :] for i in range(len(word) - 1) if word[i] != word[i + 1]}
+        {
+            word[:i] + word[i + 1] + word[i] + word[i + 2 :]
+            for i in range(len(word) - 1)
+            if word[i] != word[i + 1]
+        }
     )
 
 
@@ -329,11 +335,17 @@ def _people_hits(db: Session, params: dict) -> List[dict]:
         found = {h["id"]: h for h in hits}
         rows = db.execute(
             PEOPLE_TRANSPOSED_SQL,
-            {**params, "pattern": _surname_pattern(variants), "score": TRANSPOSED_SURNAME_SCORE},
+            {
+                **params,
+                "pattern": _surname_pattern(variants),
+                "score": TRANSPOSED_SURNAME_SCORE,
+            },
         )
         for r in rows:
             if r.id in found:
-                found[r.id]["score"] = max(found[r.id]["score"], TRANSPOSED_SURNAME_SCORE)
+                found[r.id]["score"] = max(
+                    found[r.id]["score"], TRANSPOSED_SURNAME_SCORE
+                )
             else:
                 hits.append(_person_hit(r))
     return hits
@@ -370,10 +382,35 @@ def _validated_query(q: str, min_len: int, max_len: int) -> str:
 # multi-letter designators may end in letters (FL special sessions: HB 1C): the single-letter H and S take
 # digits only (none of the 19,943 real H/S numbers has a letter suffix), so "H2O" is a topic, not bill H 2.
 _BILL_DESIGNATORS = (
-    "HCONRES", "SCONRES", "HJRES", "SJRES", "HRES", "SRES", "HJR", "SJR", "HCR", "SCR", "HJM", "SJM",
-    "HCM", "SCM", "SPB", "HB", "SB", "HR", "SR", "HM", "SM", "HJ", "SJ", "HD", "SD",
+    "HCONRES",
+    "SCONRES",
+    "HJRES",
+    "SJRES",
+    "HRES",
+    "SRES",
+    "HJR",
+    "SJR",
+    "HCR",
+    "SCR",
+    "HJM",
+    "SJM",
+    "HCM",
+    "SCM",
+    "SPB",
+    "HB",
+    "SB",
+    "HR",
+    "SR",
+    "HM",
+    "SM",
+    "HJ",
+    "SJ",
+    "HD",
+    "SD",
 )
-_bill_number_like = re.compile(r"(?:(?:%s)\d+[A-Z]{0,2}|[HS]\d+)" % "|".join(_BILL_DESIGNATORS))
+_bill_number_like = re.compile(
+    r"(?:(?:%s)\d+[A-Z]{0,2}|[HS]\d+)" % "|".join(_BILL_DESIGNATORS)
+)
 
 
 def _is_missing_bill_number(q: str, found_by_number: list) -> bool:
