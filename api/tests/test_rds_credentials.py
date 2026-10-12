@@ -38,7 +38,10 @@ class FakeSecretsManagerClient:
 
 def _real_shaped_secret(**overrides):
     # The real RDS-managed secret only ever carries these two keys (confirmed live, OPEN-260).
-    secret = {"username": "openstates_admin", "password": "correct horse battery staple"}
+    secret = {
+        "username": "openstates_admin",
+        "password": "correct horse battery staple",
+    }
     secret.update(overrides)
     return json.dumps(secret)
 
@@ -52,7 +55,9 @@ def test_missing_secret_arn_refuses_without_calling_secrets_manager(monkeypatch)
 
     monkeypatch.setattr(mod, "RDS_CREDENTIALS_SECRET_ARN", None)
 
-    credentials, error = resolve_rds_credentials(secretsmanager_client=FakeSecretsManagerClient())
+    credentials, error = resolve_rds_credentials(
+        secretsmanager_client=FakeSecretsManagerClient()
+    )
 
     assert credentials is None
     assert "RDS_CREDENTIALS_SECRET_ARN not set" in error
@@ -61,7 +66,11 @@ def test_missing_secret_arn_refuses_without_calling_secrets_manager(monkeypatch)
 def test_successful_fetch_returns_raw_unencoded_credentials(monkeypatch):
     import api.rds_credentials as mod
 
-    monkeypatch.setattr(mod, "RDS_CREDENTIALS_SECRET_ARN", "arn:aws:secretsmanager:us-east-1:1:secret:rds!x")
+    monkeypatch.setattr(
+        mod,
+        "RDS_CREDENTIALS_SECRET_ARN",
+        "arn:aws:secretsmanager:us-east-1:1:secret:rds!x",
+    )
     client = FakeSecretsManagerClient(secret_string=_real_shaped_secret())
 
     credentials, error = resolve_rds_credentials(secretsmanager_client=client)
@@ -69,7 +78,10 @@ def test_successful_fetch_returns_raw_unencoded_credentials(monkeypatch):
     assert error == ""
     # Deliberately NOT URL-encoded -- these go directly into psycopg2 connect kwargs, not a
     # URL string, and a space here should stay a literal space, not "%20".
-    assert credentials == {"username": "openstates_admin", "password": "correct horse battery staple"}
+    assert credentials == {
+        "username": "openstates_admin",
+        "password": "correct horse battery staple",
+    }
 
 
 def test_password_with_url_special_characters_is_returned_raw(monkeypatch):
@@ -78,7 +90,9 @@ def test_password_with_url_special_characters_is_returned_raw(monkeypatch):
     import api.rds_credentials as mod
 
     monkeypatch.setattr(mod, "RDS_CREDENTIALS_SECRET_ARN", "arn:secret")
-    client = FakeSecretsManagerClient(secret_string=_real_shaped_secret(password="p@ss:w/rd%25"))
+    client = FakeSecretsManagerClient(
+        secret_string=_real_shaped_secret(password="p@ss:w/rd%25")
+    )
 
     credentials, error = resolve_rds_credentials(secretsmanager_client=client)
 
@@ -110,7 +124,9 @@ def test_malformed_secret_shape_fails_cleanly_instead_of_raising(monkeypatch):
     assert "unexpected shape" in error
 
 
-def test_null_field_in_secret_fails_cleanly_instead_of_using_the_literal_string_none(monkeypatch):
+def test_null_field_in_secret_fails_cleanly_instead_of_using_the_literal_string_none(
+    monkeypatch,
+):
     import api.rds_credentials as mod
 
     monkeypatch.setattr(mod, "RDS_CREDENTIALS_SECRET_ARN", "arn:secret")
@@ -122,7 +138,9 @@ def test_null_field_in_secret_fails_cleanly_instead_of_using_the_literal_string_
     assert "unexpected shape" in error
 
 
-def test_boto3_client_construction_failure_fails_cleanly_instead_of_raising(monkeypatch):
+def test_boto3_client_construction_failure_fails_cleanly_instead_of_raising(
+    monkeypatch,
+):
     """pm-review lesson carried over from OPEN-260: boto3.client() itself can raise, not just
     get_secret_value() -- both must land in the same (None, error) tuple contract."""
     import api.rds_credentials as mod
@@ -149,7 +167,13 @@ def _reload_api_db(monkeypatch, **env):
     import importlib
     import sys
 
-    for key in ("RESOLVE_RDS_LIVE", "RDS_HOST", "RDS_PORT", "RDS_DBNAME", "DATABASE_URL"):
+    for key in (
+        "RESOLVE_RDS_LIVE",
+        "RDS_HOST",
+        "RDS_PORT",
+        "RDS_DBNAME",
+        "DATABASE_URL",
+    ):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -159,7 +183,9 @@ def _reload_api_db(monkeypatch, **env):
 
 
 def test_resolve_rds_live_unset_uses_database_url_as_is(monkeypatch):
-    db_module = _reload_api_db(monkeypatch, DATABASE_URL="postgresql://u:p@localhost/openstates")
+    db_module = _reload_api_db(
+        monkeypatch, DATABASE_URL="postgresql://u:p@localhost/openstates"
+    )
 
     assert db_module.DATABASE_URL == "postgresql://u:p@localhost/openstates"
     assert db_module.RESOLVE_RDS_LIVE is False
@@ -169,7 +195,9 @@ def test_resolve_rds_live_false_string_does_not_enable_live_resolution(monkeypat
     """Same footgun OPEN-260 found and fixed elsewhere: a bare truthiness check on
     os.environ.get(...) would treat "false" (any non-empty string) as enabled."""
     db_module = _reload_api_db(
-        monkeypatch, RESOLVE_RDS_LIVE="false", DATABASE_URL="postgresql://u:p@localhost/openstates"
+        monkeypatch,
+        RESOLVE_RDS_LIVE="false",
+        DATABASE_URL="postgresql://u:p@localhost/openstates",
     )
 
     assert db_module.RESOLVE_RDS_LIVE is False
@@ -186,7 +214,10 @@ def test_resolve_rds_live_true_builds_placeholder_url_from_rds_env_vars(monkeypa
     )
 
     assert db_module.RESOLVE_RDS_LIVE is True
-    assert db_module.DATABASE_URL == "postgresql://placeholder:placeholder@ddp-openstates.example.rds.amazonaws.com:5432/openstates"
+    assert (
+        db_module.DATABASE_URL
+        == "postgresql://placeholder:placeholder@ddp-openstates.example.rds.amazonaws.com:5432/openstates"
+    )
 
 
 def test_new_connection_fetches_live_credentials_via_do_connect(monkeypatch):
@@ -281,9 +312,14 @@ def test_existing_connection_unaffected_by_a_later_credential_change(monkeypatch
 
     def fake_resolve_after_rotation(secretsmanager_client=None):
         call_count["n"] += 1
-        return {"username": "rds_credentials_rotation_test_role", "password": "rotated-password"}, ""
+        return {
+            "username": "rds_credentials_rotation_test_role",
+            "password": "rotated-password",
+        }, ""
 
-    monkeypatch.setattr(db_module, "resolve_rds_credentials", fake_resolve_after_rotation)
+    monkeypatch.setattr(
+        db_module, "resolve_rds_credentials", fake_resolve_after_rotation
+    )
 
     # The already-open connection is untouched by the "rotation" above.
     assert conn1.execute("SELECT 1").scalar() == 1
@@ -293,7 +329,10 @@ def test_existing_connection_unaffected_by_a_later_credential_change(monkeypatch
     # rather than reusing whatever conn1 resolved at its own connect time.
     conn2 = db_module.engine.connect()
     try:
-        assert conn2.execute("SELECT current_user").scalar() == "rds_credentials_rotation_test_role"
+        assert (
+            conn2.execute("SELECT current_user").scalar()
+            == "rds_credentials_rotation_test_role"
+        )
         # do_connect only fires on a NEW physical connection, never on execute() against an
         # already-open one -- exactly 2 calls total: conn1's own connect, and conn2's.
         assert call_count["n"] == 2

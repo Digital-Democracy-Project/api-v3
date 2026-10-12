@@ -6,7 +6,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from uvicorn.workers import UvicornWorker
-from . import jurisdictions, people, bills, committees, events, ddp_search, ddp_embedding
+from . import (
+    jurisdictions,
+    people,
+    bills,
+    committees,
+    events,
+    ddp_search,
+    ddp_embedding,
+)
 
 if "SENTRY_URL" in os.environ:
     sentry_sdk.init(os.environ["SENTRY_URL"], traces_sample_rate=0)

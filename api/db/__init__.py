@@ -24,7 +24,9 @@ if RESOLVE_RDS_LIVE:
     RDS_HOST = os.environ["RDS_HOST"]
     RDS_PORT = os.environ.get("RDS_PORT", "5432")
     RDS_DBNAME = os.environ["RDS_DBNAME"]
-    DATABASE_URL = f"postgresql://placeholder:placeholder@{RDS_HOST}:{RDS_PORT}/{RDS_DBNAME}"
+    DATABASE_URL = (
+        f"postgresql://placeholder:placeholder@{RDS_HOST}:{RDS_PORT}/{RDS_DBNAME}"
+    )
 else:
     DATABASE_URL = os.environ["DATABASE_URL"].replace("postgres://", "postgresql://")
 """
@@ -77,9 +79,12 @@ if RESOLVE_RDS_LIVE:
             # caller triggered this new connection, rather than silently falling back to
             # DATABASE_URL's placeholder credential (which was never valid) or some other
             # cached value.
-            raise RuntimeError(f"OPEN-279: could not resolve live RDS credentials: {error}")
+            raise RuntimeError(
+                f"OPEN-279: could not resolve live RDS credentials: {error}"
+            )
         cparams["user"] = credentials["username"]
         cparams["password"] = credentials["password"]
+
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
