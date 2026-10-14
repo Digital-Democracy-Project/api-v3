@@ -408,6 +408,26 @@ def test_unknown_stage_prefers_pdf_text(client):
     assert all("raw_text" not in link for link in unknown["links"])
 
 
+def test_utah_stamped_amended_versions_are_ordered_by_date_and_hour(client):
+    """OPEN-361: a real Utah bill's three stamped "Amended" versions, created out of order.
+    By their file timestamps the order is Jan, Feb, Mar; their last numbers (108, 713, 587)
+    used to rank them Jan, Mar, Feb. api-v3's copy of the ordering must agree with the
+    archiver's, so this array is the order the archiver diffed them in."""
+    jan = "Amended 1/27/2026 11:01:108"
+    feb = "Amended 2/9/2026 11:02:713"
+    mar = "Amended 3/3/2026 19:03:587"
+    with _temp_bill(
+        "HB 9205",
+        [
+            (note, [(f"https://example.com/t5-{i}.pdf", "application/pdf", note)])
+            for i, note in enumerate((mar, jan, feb))
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+    assert [v["note"] for v in versions] == [jan, feb, mar]
+    assert [v["version_ordinal"] for v in versions] == [0, 1, 2]
+
+
 def test_bill_with_only_unknown_versions_still_gets_unknown_fields(client):
     """Review fix: the unknown-stage enrichment must not depend on a classifiable version
     existing. Link-level raw_text and diff stay absent."""
