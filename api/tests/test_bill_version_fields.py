@@ -266,6 +266,27 @@ def test_same_media_type_rows_resolve_to_the_last_url_every_time(client):
     assert first == again == last_url
 
 
+def test_the_url_order_is_pythons_not_the_databases(client):
+    """OPEN-369: the archiver sorts links with Python's string comparison, so uppercase sorts
+    before lowercase ("Z" < "a"). A database collation can say the opposite. The picker must agree
+    with the archiver, so the last by Python order here is the lowercase one."""
+    with _temp_bill(
+        "HB 9210",
+        [
+            (
+                "Introduced",
+                [
+                    ("https://example.com/t10-a.pdf", "application/pdf", "lower"),
+                    ("https://example.com/t10-Z.pdf", "application/pdf", "upper"),
+                ],
+            )
+        ],
+    ) as bill_id:
+        chosen = _get(client, bill_id)[0]["archived_document_id"]
+        lower = _doc_id("HB 9210", "https://example.com/t10-a.pdf")
+    assert chosen == lower
+
+
 def test_diff_follows_the_chosen_xml_row(client):
     with _temp_bill(
         "HB 9208",

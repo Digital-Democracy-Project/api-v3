@@ -105,11 +105,11 @@ class BillPagination(Pagination):
                 models.BillVersionDocument.source_url.in_(urls),
                 models.BillVersionDocument.is_error.is_(False),
             )
-            .order_by(
-                models.BillVersionDocument.source_url, models.BillVersionDocument.id
-            )
             .all()
         )
+        # Sorted here, in Python, not by the database: the archiver orders links by Python's
+        # string comparison, and a database collation can order URLs differently.
+        archived.sort(key=lambda row: (row.source_url, row.id))
         by_media_type = {}
         for row in archived:
             if row.raw_text:

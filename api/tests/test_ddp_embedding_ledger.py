@@ -268,8 +268,8 @@ def test_a_stage_unknown_version_with_several_eligible_rows_matches_the_detail(c
             chosen = db.query(BillVersionDocument).get(doc_id)
             assert (
                 chosen.media_type == "text/xml"
-                and chosen.source_url == "https://x/m.xml"
-            )  # XML, then last URL
+                and chosen.source_url == "https://x/m2.xml"
+            )  # XML, then the last URL in Python's order ("." sorts before "2")
         finally:
             db.close()
 
