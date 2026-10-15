@@ -133,7 +133,8 @@ def note_stage(note: str) -> tuple:
     lowered = note.lower()
 
     # OPEN-366: North Carolina's "Edition <N>", "Ratified" and "SL <year>-<N>", copied verbatim
-    # from openstates-core (see its comment there for the evidence).
+    # from openstates-core PR #62 (Digital-Democracy-Project/openstates-core, branch
+    # fix/OPEN-366-nc-edition-stages-and-stamp-exclusion; see its comment for the evidence).
     if re.fullmatch(r"sl \d{4}-\d+", lowered):
         return (STAGE_ENACTED, 0.0)
     if lowered == "ratified":
