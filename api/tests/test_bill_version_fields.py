@@ -8,7 +8,10 @@ import datetime
 import uuid
 from contextlib import contextmanager
 
+import pytest
+
 from api.db.models import Bill, BillVersion, BillVersionDocument, BillVersionLink
+from api.version_ordering import STAGE_UNKNOWN, note_stage
 
 from .conftest import TestingSessionLocal
 
@@ -266,6 +269,38 @@ def test_same_media_type_rows_resolve_to_the_last_url_every_time(client):
     assert first == again == last_url
 
 
+def test_the_last_document_by_url_wins_among_same_type_documents(client):
+    """OPEN-369: a version with several printings of one media type. The archiver keeps the last
+    one by URL as the next version's diff baseline, so that is the one api-v3 offers; the lowest
+    id used to win, which is the first created here."""
+    with _temp_bill(
+        "HB 9209",
+        [
+            (
+                "Introduced",
+                [
+                    # Created in this order, so the first has the lowest id.
+                    ("https://example.com/t9-int-b.pdf", "application/pdf", "second"),
+                    ("https://example.com/t9-int-a.pdf", "application/pdf", "first"),
+                    ("https://example.com/t9-int-c.pdf", "application/pdf", "third"),
+                ],
+            ),
+            (
+                "Enrolled",
+                [("https://example.com/t9-enr.pdf", "application/pdf", "enrolled")],
+            ),
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+        expected_id = _doc_id("HB 9209", "https://example.com/t9-int-c.pdf")
+    introduced = next(v for v in versions if v["note"] == "Introduced")
+    assert introduced["archived_document_id"] == expected_id
+    texts = {link["url"]: link.get("raw_text") for link in introduced["links"]}
+    assert texts["https://example.com/t9-int-c.pdf"] == "third"
+    assert texts["https://example.com/t9-int-a.pdf"] is None
+    assert texts["https://example.com/t9-int-b.pdf"] is None
+
+
 def test_the_url_order_is_pythons_not_the_databases(client):
     """OPEN-369: the archiver sorts links with Python's string comparison, so uppercase sorts
     before lowercase ("Z" < "a"). A database collation can say the opposite. The picker must agree
@@ -428,36 +463,54 @@ def test_unknown_stage_prefers_pdf_text(client):
     assert all("raw_text" not in link for link in unknown["links"])
 
 
-def test_the_last_document_by_url_wins_among_same_type_documents(client):
-    """OPEN-369: a version with several printings of one media type. The archiver keeps the last
-    one by URL as the next version's diff baseline, so that is the one api-v3 offers; the lowest
-    id used to win, which is the first created here."""
+def test_a_whitespace_only_pdf_does_not_beat_the_html_text(client):
+    """OPEN-365: an image-only PDF extracts to whitespace. The PDF preference used to pick it,
+    so the version's real HTML text was never offered. 126 Arizona versions have this shape."""
+    blank_pdf = "\n \n\x0c\n"
     with _temp_bill(
-        "HB 9209",
+        "HB 9207",
         [
             (
                 "Introduced",
-                [
-                    # Created in this order, so the first has the lowest id.
-                    ("https://example.com/t9-int-b.pdf", "application/pdf", "second"),
-                    ("https://example.com/t9-int-a.pdf", "application/pdf", "first"),
-                    ("https://example.com/t9-int-c.pdf", "application/pdf", "third"),
-                ],
+                [("https://example.com/t7-int.pdf", "application/pdf", "int text")],
             ),
             (
                 "Enrolled",
-                [("https://example.com/t9-enr.pdf", "application/pdf", "enrolled")],
+                [
+                    ("https://example.com/t7-enr.pdf", "application/pdf", blank_pdf),
+                    ("https://example.com/t7-enr.html", "text/html", "enrolled text"),
+                ],
             ),
         ],
     ) as bill_id:
         versions = _get(client, bill_id)
-        expected_id = _doc_id("HB 9209", "https://example.com/t9-int-c.pdf")
-    introduced = next(v for v in versions if v["note"] == "Introduced")
-    assert introduced["archived_document_id"] == expected_id
-    texts = {link["url"]: link.get("raw_text") for link in introduced["links"]}
-    assert texts["https://example.com/t9-int-c.pdf"] == "third"
-    assert texts["https://example.com/t9-int-a.pdf"] is None
-    assert texts["https://example.com/t9-int-b.pdf"] is None
+        html_id = _doc_id("HB 9207", "https://example.com/t7-enr.html")
+    enrolled = next(v for v in versions if v["note"] == "Enrolled")
+    assert enrolled["archived_document_id"] == html_id
+    texts = {link["url"]: link.get("raw_text") for link in enrolled["links"]}
+    assert texts["https://example.com/t7-enr.html"] == "enrolled text"
+    pdf = next(v for v in enrolled["links"] if v["media_type"] == "application/pdf")
+    assert "raw_text" not in pdf
+
+
+def test_a_version_whose_only_text_is_whitespace_has_no_archived_text(client):
+    with _temp_bill(
+        "HB 9208",
+        [
+            (
+                "Introduced",
+                [("https://example.com/t8-int.pdf", "application/pdf", "int text")],
+            ),
+            (
+                "Enrolled",
+                [("https://example.com/t8-enr.pdf", "application/pdf", "  \n ")],
+            ),
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+    enrolled = next(v for v in versions if v["note"] == "Enrolled")
+    assert enrolled.get("archived_document_id") is None
+    assert all("raw_text" not in link for link in enrolled["links"])
 
 
 def test_utah_stamped_amended_versions_are_ordered_by_date_and_hour(client):
@@ -478,6 +531,50 @@ def test_utah_stamped_amended_versions_are_ordered_by_date_and_hour(client):
         versions = _get(client, bill_id)
     assert [v["note"] for v in versions] == [jan, feb, mar]
     assert [v["version_ordinal"] for v in versions] == [0, 1, 2]
+
+
+def test_north_carolina_editions_ratified_and_session_law_are_ordered_and_classified(
+    client,
+):
+    """OPEN-366: a real NC bill's versions, created out of order. Before the stage rules these
+    were all unknown-stage: no diff, and listed first in their original relative order.
+    api-v3's copy of the ordering must agree with the archiver's."""
+    notes = ["Filed", "Edition 1", "Edition 2", "Edition 10", "Ratified", "SL 2025-14"]
+    with _temp_bill(
+        "HB 9206",
+        [
+            (note, [(f"https://example.com/t6-{i}.pdf", "application/pdf", note)])
+            for i, note in reversed(list(enumerate(notes)))
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+    assert [v["note"] for v in versions] == notes
+    assert [v["version_ordinal"] for v in versions] == list(range(len(notes)))
+    assert [v["version_stage"] for v in versions] == [
+        "introduced",
+        "amendment",
+        "amendment",
+        "amendment",
+        "final_passage",
+        "enacted",
+    ]
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        # Near-misses of the three North Carolina shapes stay unknown, exactly as in
+        # openstates-core (so the copy never claims another state's notes).
+        "Edition",
+        "Edition 0",
+        "Edition 2 Revised",
+        "Ratified Bill",
+        "SL 2025",
+        "SL 2025-14 Corrected",
+    ],
+)
+def test_north_carolina_stage_rules_stay_exact(note):
+    assert note_stage(note)[0] == STAGE_UNKNOWN
 
 
 def test_bill_with_only_unknown_versions_still_gets_unknown_fields(client):
