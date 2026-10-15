@@ -8,7 +8,10 @@ import datetime
 import uuid
 from contextlib import contextmanager
 
+import pytest
+
 from api.db.models import Bill, BillVersion, BillVersionDocument, BillVersionLink
+from api.version_ordering import STAGE_UNKNOWN, note_stage
 
 from .conftest import TestingSessionLocal
 
@@ -426,6 +429,50 @@ def test_utah_stamped_amended_versions_are_ordered_by_date_and_hour(client):
         versions = _get(client, bill_id)
     assert [v["note"] for v in versions] == [jan, feb, mar]
     assert [v["version_ordinal"] for v in versions] == [0, 1, 2]
+
+
+def test_north_carolina_editions_ratified_and_session_law_are_ordered_and_classified(
+    client,
+):
+    """OPEN-366: a real NC bill's versions, created out of order. Before the stage rules these
+    were all unknown-stage: no diff, and listed first in their original relative order.
+    api-v3's copy of the ordering must agree with the archiver's."""
+    notes = ["Filed", "Edition 1", "Edition 2", "Edition 10", "Ratified", "SL 2025-14"]
+    with _temp_bill(
+        "HB 9206",
+        [
+            (note, [(f"https://example.com/t6-{i}.pdf", "application/pdf", note)])
+            for i, note in reversed(list(enumerate(notes)))
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+    assert [v["note"] for v in versions] == notes
+    assert [v["version_ordinal"] for v in versions] == list(range(len(notes)))
+    assert [v["version_stage"] for v in versions] == [
+        "introduced",
+        "amendment",
+        "amendment",
+        "amendment",
+        "final_passage",
+        "enacted",
+    ]
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        # Near-misses of the three North Carolina shapes stay unknown, exactly as in
+        # openstates-core (so the copy never claims another state's notes).
+        "Edition",
+        "Edition 0",
+        "Edition 2 Revised",
+        "Ratified Bill",
+        "SL 2025",
+        "SL 2025-14 Corrected",
+    ],
+)
+def test_north_carolina_stage_rules_stay_exact(note):
+    assert note_stage(note)[0] == STAGE_UNKNOWN
 
 
 def test_bill_with_only_unknown_versions_still_gets_unknown_fields(client):
