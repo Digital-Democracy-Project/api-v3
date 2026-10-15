@@ -11,7 +11,7 @@ from contextlib import contextmanager
 import pytest
 
 from api.db.models import Bill, BillVersion, BillVersionDocument, BillVersionLink
-from api.version_ordering import STAGE_UNKNOWN, note_stage
+from api.version_ordering import STAGE_INTRODUCED, STAGE_UNKNOWN, note_stage
 
 from .conftest import TestingSessionLocal
 
@@ -461,6 +461,55 @@ def test_unknown_stage_prefers_pdf_text(client):
     assert unknown["archived_raw_text"] == "pdf copy"
     assert unknown["archived_document_id"] == expected_id
     assert all("raw_text" not in link for link in unknown["links"])
+
+
+def test_washington_resolution_families_are_ordered_and_classified(client):
+    """OPEN-373: a Washington resolution's versions, created out of order. Before the stage rule
+    the introduced "Joint Memorial" was unknown-stage: no diff, and listed first in its original
+    relative order. api-v3's copy of the ordering must agree with the archiver's."""
+    notes = [
+        "Joint Memorial",
+        "Substitute Joint Memorial",
+        "Engrossed Substitute Joint Memorial",
+    ]
+    with _temp_bill(
+        "SJM 9211",
+        [
+            (note, [(f"https://example.com/t11-{i}.pdf", "application/pdf", note)])
+            for i, note in reversed(list(enumerate(notes)))
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+    assert [v["note"] for v in versions] == notes
+    assert [v["version_ordinal"] for v in versions] == [0, 1, 2]
+    assert [v["version_stage"] for v in versions] == [
+        "introduced",
+        "amendment",
+        "amendment",
+    ]
+
+
+@pytest.mark.parametrize(
+    "note",
+    ["Resolution", "Joint Memorial", "Joint Resolution", "Concurrent Resolution"],
+)
+def test_the_four_washington_notes_are_introduced(note):
+    assert note_stage(note) == (STAGE_INTRODUCED, 0.0)
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "Resolutions",
+        "Joint Resolution 1",
+        "Senate Resolution",
+        "House Resolution",
+        "Resolution of the Senate",
+        "Memorial",
+    ],
+)
+def test_the_washington_resolution_rule_stays_exact(note):
+    assert note_stage(note)[0] == STAGE_UNKNOWN
 
 
 def test_a_whitespace_only_pdf_does_not_beat_the_html_text(client):
