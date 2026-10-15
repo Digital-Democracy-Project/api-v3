@@ -122,6 +122,14 @@ def extract_ordinal(note: str) -> float:
     return 0.0
 
 
+# OPEN-373: Washington's introduced resolutions and memorials, copied verbatim from openstates-core
+# PR #67 (Digital-Democracy-Project/openstates-core, branch fix/OPEN-373-wa-resolution-stages; see
+# its comment for the evidence). Exact notes, so no other jurisdiction's note is pulled in.
+_INTRODUCED_RESOLUTION_NOTES = frozenset(
+    {"resolution", "joint memorial", "joint resolution", "concurrent resolution"}
+)
+
+
 def note_stage(note: str) -> tuple:
     """
     Classify a version_note into (stage, ordinal) using the content-based stage table built
@@ -141,6 +149,9 @@ def note_stage(note: str) -> tuple:
         return (STAGE_FINAL_PASSAGE, 0.0)
     if re.fullmatch(r"edition [1-9]\d*", lowered):
         return (STAGE_AMENDMENT, extract_ordinal(note))
+
+    if lowered in _INTRODUCED_RESOLUTION_NOTES:
+        return (STAGE_INTRODUCED, 0.0)
 
     if re.search(
         r"public act|public law|\bchapter|passed legislature|concurred", lowered
