@@ -85,9 +85,12 @@ class BillPagination(Pagination):
         page numbers or line-wrap debris), then PDF, then anything else with text. The
         archiver itself no longer prefers any type (OPEN-217 keeps one diff baseline per media
         type), so this priority is the API's own. Whitespace-only text does not count as text
-        (OPEN-365). Rows sharing a media type resolve to the
-        lowest id, so every request, and every instance replicating the table, picks the same
-        row. Media types are compared as exact strings: the archive holds only text/xml,
+        (OPEN-365). Rows sharing a media type resolve to the one with the last source_url, which
+        is the document the archiver keeps as a version's baseline (it walks links sorted by
+        media type and url and keeps the last text), so the document chosen for one version is
+        the baseline of the diff on the one chosen for the next (OPEN-369). Every request, and
+        every instance replicating the table, picks the same row. Media types are compared as
+        exact strings: the archive holds only text/xml,
         application/pdf and text/html (checked 2026-10-02: no NULL types, no parameterized or
         mixed-case variants, no whitespace-only text), so no normalization is needed."""
         if not version.links:
@@ -103,15 +106,19 @@ class BillPagination(Pagination):
                 models.BillVersionDocument.source_url.in_(urls),
                 models.BillVersionDocument.is_error.is_(False),
             )
-            .order_by(models.BillVersionDocument.id)
             .all()
         )
+        # Sorted here, in Python, not by the database: the archiver orders links by Python's
+        # string comparison, and a database collation can order URLs differently. The IN filter above
+        # excludes a NULL source_url and the table is unique per (bill, note, date, url), so every
+        # row here has a comparable URL and no two rows tie.
+        archived.sort(key=lambda row: row.source_url)
         by_media_type = {}
         for row in archived:
             # OPEN-365: whitespace-only text (an image-only PDF) is not text. A blank PDF used to
             # win here over the same version's HTML, so LegBot was handed the blank.
             if row.raw_text and row.raw_text.strip():
-                by_media_type.setdefault(row.media_type, row)
+                by_media_type[row.media_type] = row
         if not by_media_type:
             return None
         return (

@@ -73,7 +73,7 @@ def test_a_bill_with_no_archived_document_is_not_in_the_ledger(client):
         assert bill_id.removeprefix("ocd-bill/") not in _ledger_all(client)
 
 
-def test_the_ledger_uses_the_pickers_choice_xml_over_pdf_then_lowest_id(client):
+def test_the_ledger_uses_the_pickers_choice_xml_over_pdf_then_last_url(client):
     shape = [
         (
             "Introduced",
@@ -112,9 +112,9 @@ def test_the_ledger_uses_the_pickers_choice_xml_over_pdf_then_lowest_id(client):
             rows["https://x/a.xml"] in detail and rows["https://x/a.pdf"] not in detail
         )  # XML won
         assert (
-            rows["https://x/b1.pdf"] in detail
-            and rows["https://x/b2.pdf"] not in detail
-        )  # lowest id won
+            rows["https://x/b2.pdf"] in detail
+            and rows["https://x/b1.pdf"] not in detail
+        )  # last URL won (OPEN-369)
 
 
 def test_the_ledger_pages_by_bill_and_the_pages_add_up_to_the_unpaged_ledger(client):
@@ -268,8 +268,8 @@ def test_a_stage_unknown_version_with_several_eligible_rows_matches_the_detail(c
             chosen = db.query(BillVersionDocument).get(doc_id)
             assert (
                 chosen.media_type == "text/xml"
-                and chosen.source_url == "https://x/m.xml"
-            )  # XML, then lowest id
+                and chosen.source_url == "https://x/m2.xml"
+            )  # XML, then the last URL in Python's order ("." sorts before "2")
         finally:
             db.close()
 
@@ -288,7 +288,7 @@ def test_two_versions_that_resolve_to_one_row_are_listed_once_and_the_detail_nam
         ids = [v["archived_document_id"] for v in versions]
         assert (
             len(ids) == 2 and ids[0] == ids[1]
-        )  # both versions resolve to the lowest-id row
+        )  # both versions resolve to the same row
         docs = _ledger_all(client)[bare]["documents"]
         assert [d["archived_document_id"] for d in docs] == [ids[0]]  # listed once
 
