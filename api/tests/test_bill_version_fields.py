@@ -243,15 +243,17 @@ def test_xml_row_preferred_over_pdf_and_html(client):
     }
 
 
-def test_same_media_type_rows_resolve_to_the_lowest_id(client):
-    """OPEN-317: two archived PDFs for one version -- the earlier row wins every time, not
-    whichever the database happens to return last."""
+def test_same_media_type_rows_resolve_to_the_last_url_every_time(client):
+    """OPEN-317, changed by OPEN-369: two archived PDFs for one version. The one with the last
+    URL wins, every time, not whichever the database happens to return (it used to be the lowest
+    id)."""
     with _temp_bill(
         "HB 9207",
         [
             (
                 "Introduced",
                 [
+                    # a is created first, so it has the lowest id; b has the last URL.
                     ("https://example.com/t7-a.pdf", "application/pdf", "first"),
                     ("https://example.com/t7-b.pdf", "application/pdf", "second"),
                 ],
@@ -260,11 +262,8 @@ def test_same_media_type_rows_resolve_to_the_lowest_id(client):
     ) as bill_id:
         first = _get(client, bill_id)[0]["archived_document_id"]
         again = _get(client, bill_id)[0]["archived_document_id"]
-        lowest = min(
-            _doc_id("HB 9207", "https://example.com/t7-a.pdf"),
-            _doc_id("HB 9207", "https://example.com/t7-b.pdf"),
-        )
-    assert first == again == lowest
+        last_url = _doc_id("HB 9207", "https://example.com/t7-b.pdf")
+    assert first == again == last_url
 
 
 def test_diff_follows_the_chosen_xml_row(client):
@@ -406,6 +405,38 @@ def test_unknown_stage_prefers_pdf_text(client):
     assert unknown["archived_raw_text"] == "pdf copy"
     assert unknown["archived_document_id"] == expected_id
     assert all("raw_text" not in link for link in unknown["links"])
+
+
+def test_the_last_document_by_url_wins_among_same_type_documents(client):
+    """OPEN-369: a version with several printings of one media type. The archiver keeps the last
+    one by URL as the next version's diff baseline, so that is the one api-v3 offers; the lowest
+    id used to win, which is the first created here."""
+    with _temp_bill(
+        "HB 9209",
+        [
+            (
+                "Introduced",
+                [
+                    # Created in this order, so the first has the lowest id.
+                    ("https://example.com/t9-int-b.pdf", "application/pdf", "second"),
+                    ("https://example.com/t9-int-a.pdf", "application/pdf", "first"),
+                    ("https://example.com/t9-int-c.pdf", "application/pdf", "third"),
+                ],
+            ),
+            (
+                "Enrolled",
+                [("https://example.com/t9-enr.pdf", "application/pdf", "enrolled")],
+            ),
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+        expected_id = _doc_id("HB 9209", "https://example.com/t9-int-c.pdf")
+    introduced = next(v for v in versions if v["note"] == "Introduced")
+    assert introduced["archived_document_id"] == expected_id
+    texts = {link["url"]: link.get("raw_text") for link in introduced["links"]}
+    assert texts["https://example.com/t9-int-c.pdf"] == "third"
+    assert texts["https://example.com/t9-int-a.pdf"] is None
+    assert texts["https://example.com/t9-int-b.pdf"] is None
 
 
 def test_utah_stamped_amended_versions_are_ordered_by_date_and_hour(client):

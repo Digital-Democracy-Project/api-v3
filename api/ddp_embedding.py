@@ -7,7 +7,7 @@ with what IS, per document, without reading every bill's 150 to 380 KB detail pa
 
 It cannot disagree with the bill detail: each row is chosen by the same picker the detail endpoint
 uses (`BillPagination._archived_row_for`: XML first, then PDF, then any other format with text,
-lowest id on a tie; OPEN-317), applied to the same bill versions. Read-only.
+last URL on a tie; OPEN-317, OPEN-369), applied to the same bill versions. Read-only.
 """
 from typing import List, Optional
 
