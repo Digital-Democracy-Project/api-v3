@@ -132,6 +132,15 @@ def note_stage(note: str) -> tuple:
     """
     lowered = note.lower()
 
+    # OPEN-366: North Carolina's "Edition <N>", "Ratified" and "SL <year>-<N>", copied verbatim
+    # from openstates-core (see its comment there for the evidence).
+    if re.fullmatch(r"sl \d{4}-\d+", lowered):
+        return (STAGE_ENACTED, 0.0)
+    if lowered == "ratified":
+        return (STAGE_FINAL_PASSAGE, 0.0)
+    if re.fullmatch(r"edition [1-9]\d*", lowered):
+        return (STAGE_AMENDMENT, extract_ordinal(note))
+
     if re.search(
         r"public act|public law|\bchapter|passed legislature|concurred", lowered
     ):

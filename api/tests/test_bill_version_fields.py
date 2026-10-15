@@ -428,6 +428,26 @@ def test_utah_stamped_amended_versions_are_ordered_by_date_and_hour(client):
     assert [v["version_ordinal"] for v in versions] == [0, 1, 2]
 
 
+def test_north_carolina_editions_ratified_and_session_law_are_ordered_and_classified(
+    client,
+):
+    """OPEN-366: a real NC bill's versions, created out of order. Before the stage rules these
+    were all unknown-stage: no diff, and listed first in their original relative order.
+    api-v3's copy of the ordering must agree with the archiver's."""
+    notes = ["Filed", "Edition 1", "Edition 2", "Edition 10", "Ratified", "SL 2025-14"]
+    with _temp_bill(
+        "HB 9206",
+        [
+            (note, [(f"https://example.com/t6-{i}.pdf", "application/pdf", note)])
+            for i, note in reversed(list(enumerate(notes)))
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+    assert [v["note"] for v in versions] == notes
+    assert [v["version_ordinal"] for v in versions] == list(range(len(notes)))
+    assert all(v["version_stage"] != "unknown" for v in versions)
+
+
 def test_bill_with_only_unknown_versions_still_gets_unknown_fields(client):
     """Review fix: the unknown-stage enrichment must not depend on a classifiable version
     existing. Link-level raw_text and diff stay absent."""
