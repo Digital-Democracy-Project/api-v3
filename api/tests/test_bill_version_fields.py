@@ -408,6 +408,56 @@ def test_unknown_stage_prefers_pdf_text(client):
     assert all("raw_text" not in link for link in unknown["links"])
 
 
+def test_a_whitespace_only_pdf_does_not_beat_the_html_text(client):
+    """OPEN-365: an image-only PDF extracts to whitespace. The PDF preference used to pick it,
+    so the version's real HTML text was never offered. 126 Arizona versions have this shape."""
+    blank_pdf = "\n \n\x0c\n"
+    with _temp_bill(
+        "HB 9207",
+        [
+            (
+                "Introduced",
+                [("https://example.com/t7-int.pdf", "application/pdf", "int text")],
+            ),
+            (
+                "Enrolled",
+                [
+                    ("https://example.com/t7-enr.pdf", "application/pdf", blank_pdf),
+                    ("https://example.com/t7-enr.html", "text/html", "enrolled text"),
+                ],
+            ),
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+        html_id = _doc_id("HB 9207", "https://example.com/t7-enr.html")
+    enrolled = next(v for v in versions if v["note"] == "Enrolled")
+    assert enrolled["archived_document_id"] == html_id
+    texts = {link["url"]: link.get("raw_text") for link in enrolled["links"]}
+    assert texts["https://example.com/t7-enr.html"] == "enrolled text"
+    pdf = next(v for v in enrolled["links"] if v["media_type"] == "application/pdf")
+    assert "raw_text" not in pdf
+
+
+def test_a_version_whose_only_text_is_whitespace_has_no_archived_text(client):
+    with _temp_bill(
+        "HB 9208",
+        [
+            (
+                "Introduced",
+                [("https://example.com/t8-int.pdf", "application/pdf", "int text")],
+            ),
+            (
+                "Enrolled",
+                [("https://example.com/t8-enr.pdf", "application/pdf", "  \n ")],
+            ),
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+    enrolled = next(v for v in versions if v["note"] == "Enrolled")
+    assert enrolled.get("archived_document_id") is None
+    assert all("raw_text" not in link for link in enrolled["links"])
+
+
 def test_utah_stamped_amended_versions_are_ordered_by_date_and_hour(client):
     """OPEN-361: a real Utah bill's three stamped "Amended" versions, created out of order.
     By their file timestamps the order is Jan, Feb, Mar; their last numbers (108, 713, 587)

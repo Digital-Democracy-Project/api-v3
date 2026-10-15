@@ -84,7 +84,8 @@ class BillPagination(Pagination):
         version has several archived formats, the XML text wins (OPEN-317: no page headers,
         page numbers or line-wrap debris), then PDF, then anything else with text. The
         archiver itself no longer prefers any type (OPEN-217 keeps one diff baseline per media
-        type), so this priority is the API's own. Rows sharing a media type resolve to the
+        type), so this priority is the API's own. Whitespace-only text does not count as text
+        (OPEN-365). Rows sharing a media type resolve to the
         lowest id, so every request, and every instance replicating the table, picks the same
         row. Media types are compared as exact strings: the archive holds only text/xml,
         application/pdf and text/html (checked 2026-10-02: no NULL types, no parameterized or
@@ -107,7 +108,9 @@ class BillPagination(Pagination):
         )
         by_media_type = {}
         for row in archived:
-            if row.raw_text:
+            # OPEN-365: whitespace-only text (an image-only PDF) is not text. A blank PDF used to
+            # win here over the same version's HTML, so LegBot was handed the blank.
+            if row.raw_text and row.raw_text.strip():
                 by_media_type.setdefault(row.media_type, row)
         if not by_media_type:
             return None
