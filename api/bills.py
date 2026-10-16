@@ -19,6 +19,7 @@ from .version_ordering import (
     STAGE_INTRODUCED,
     STAGE_UNKNOWN,
     note_stage,
+    origin_chamber,
     version_sort_key,
 )
 
@@ -205,7 +206,10 @@ class BillPagination(Pagination):
         ordered = sorted(
             classifiable,
             key=lambda v: version_sort_key(
-                v.note, v.date, [link.url for link in v.links]
+                v.note,
+                v.date,
+                [link.url for link in v.links],
+                origin_chamber(data.identifier),
             ),
         )
 
