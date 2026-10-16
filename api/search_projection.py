@@ -22,7 +22,12 @@ from typing import Dict, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .version_ordering import STAGE_UNKNOWN, note_stage, version_sort_key
+from .version_ordering import (
+    STAGE_UNKNOWN,
+    note_stage,
+    origin_chamber,
+    version_sort_key,
+)
 
 # Measured 2026-09-29: the largest archived document is 7.0M characters and still parses
 # (253 KB of tsvector, far under Postgres' 1 MB limit). The cap bounds build time, not
@@ -113,10 +118,11 @@ STALE_COUNT_SQL = text("SELECT count(*) " + _STALE_FROM_WHERE)
 
 DOCS_SQL = text(
     """
-    SELECT id, bill_id, version_note, version_date, media_type, char_length(raw_text) AS n_chars,
-           source_url
-    FROM ddp_bill_version_document
-    WHERE bill_id = ANY(:bill_ids) AND NOT is_error AND coalesce(raw_text, '') <> ''
+    SELECT d.id, d.bill_id, d.version_note, d.version_date, d.media_type,
+           char_length(d.raw_text) AS n_chars, d.source_url, b.identifier
+    FROM ddp_bill_version_document d
+    JOIN opencivicdata_bill b ON b.id = d.bill_id
+    WHERE d.bill_id = ANY(:bill_ids) AND NOT d.is_error AND coalesce(d.raw_text, '') <> ''
 """
 )
 
@@ -226,10 +232,13 @@ def pick_current_docs(rows) -> Dict[str, int]:
     # A version's number comes from all of its documents (the PDF carries it, an HTML twin may
     # not), so both documents of one version sort alike. Rows without a URL column (tests) have none.
     urls_by_version: Dict[tuple, list] = {}
+    origin_by_bill: Dict[str, Optional[str]] = {}
     for doc_id, bill_id, note, date, media_type, _n_chars, *rest in rows:
         urls_by_version.setdefault((bill_id, note or "", date or ""), []).append(
             rest[0] if rest else None
         )
+        if len(rest) > 1:
+            origin_by_bill[bill_id] = origin_chamber(rest[1])
     for doc_id, bill_id, note, date, media_type, _n_chars, *_rest in rows:
         if note_stage(note or "")[0] == STAGE_UNKNOWN:
             continue
@@ -240,7 +249,12 @@ def pick_current_docs(rows) -> Dict[str, int]:
     for bill_id, docs in by_bill.items():
         docs.sort(
             key=lambda d: (
-                version_sort_key(d[1], d[2], urls_by_version[(bill_id, d[1], d[2])]),
+                version_sort_key(
+                    d[1],
+                    d[2],
+                    urls_by_version[(bill_id, d[1], d[2])],
+                    origin_by_bill.get(bill_id),
+                ),
                 d[3] == "application/pdf",
                 d[0],
             )

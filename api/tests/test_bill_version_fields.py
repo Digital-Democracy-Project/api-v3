@@ -720,3 +720,42 @@ def test_versions_without_a_document_number_keep_their_order(client):
     ) as bill_id:
         versions = _get(client, bill_id)
     assert [v["note"] for v in versions] == ["Introduced", "Enrolled"]
+
+
+# OPEN-382: Arizona's Engrossed Versions are placed among its action documents by the bill's
+# origin chamber (from its identifier).
+def _az_versions():
+    return [
+        ("Introduced Version", [("https://x.test/i.pdf", "application/pdf", "a")]),
+        (
+            "Senate Engrossed Version",
+            [("https://x.test/s.pdf", "application/pdf", "e")],
+        ),
+        ("SENATE - Natural Resources", [(_az(540756), "application/pdf", "d")]),
+        ("House Engrossed Version", [("https://x.test/h.pdf", "application/pdf", "c")]),
+        ("HOUSE - Education", [(_az(537487), "application/pdf", "b")]),
+    ]
+
+
+def test_arizona_house_bill_places_engrossed_versions_by_origin_chamber(client):
+    with _temp_bill("HB 9382", _az_versions()) as bill_id:
+        versions = _get(client, bill_id)
+    assert [v["note"] for v in versions] == [
+        "Introduced Version",
+        "HOUSE - Education",
+        "House Engrossed Version",
+        "SENATE - Natural Resources",
+        "Senate Engrossed Version",
+    ]
+
+
+def test_arizona_senate_bill_mirrors_it(client):
+    with _temp_bill("SB 9382", _az_versions()) as bill_id:
+        versions = _get(client, bill_id)
+    assert [v["note"] for v in versions] == [
+        "Introduced Version",
+        "SENATE - Natural Resources",
+        "Senate Engrossed Version",
+        "HOUSE - Education",
+        "House Engrossed Version",
+    ]

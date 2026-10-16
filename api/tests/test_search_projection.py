@@ -539,6 +539,52 @@ def test_pick_current_docs_orders_arizona_action_documents_by_document_number():
     assert sp.pick_current_docs(docs[::-1]) == {"b": 1}
 
 
+def test_pick_current_docs_places_arizona_engrossed_by_the_bills_origin_chamber():
+    """OPEN-382: for a House bill the Senate Engrossed Version is the current one, for a Senate
+    bill it is the House Engrossed Version, whatever order the rows arrive in."""
+
+    def docs(identifier):
+        url = "https://x.test/f.pdf"
+        return [
+            (
+                1,
+                "b",
+                "House Engrossed Version",
+                "",
+                "application/pdf",
+                10,
+                url,
+                identifier,
+            ),
+            (2, "b", "HOUSE - Education", "", "application/pdf", 10, url, identifier),
+            (
+                3,
+                "b",
+                "Senate Engrossed Version",
+                "",
+                "application/pdf",
+                10,
+                url,
+                identifier,
+            ),
+            (
+                4,
+                "b",
+                "SENATE - Natural Resources",
+                "",
+                "application/pdf",
+                10,
+                url,
+                identifier,
+            ),
+        ]
+
+    for rows in (docs("HB 2014"), docs("HB 2014")[::-1]):
+        assert sp.pick_current_docs(rows) == {"b": 3}
+    for rows in (docs("SB 1649"), docs("SB 1649")[::-1]):
+        assert sp.pick_current_docs(rows) == {"b": 1}
+
+
 def test_pick_current_docs_prefers_pdf_within_one_version():
     docs = [
         _doc(1, "b", "Introduced", "application/pdf"),
