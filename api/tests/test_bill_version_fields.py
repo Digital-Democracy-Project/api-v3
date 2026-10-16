@@ -681,3 +681,39 @@ def test_bill_without_archives_in_other_jurisdiction_is_unchanged(client):
         assert "archived_document_id" not in version
         assert "archived_raw_text" not in version
         assert "diff_from_previous_version" not in version
+
+
+# OPEN-368: Arizona's "HOUSE - ..." / "SENATE - ..." action documents tie on stage; the site's
+# document number in the link URL orders them.
+def _az(doc_id):
+    return f"https://apps.azleg.gov/BillStatus/GetDocumentPdf/{doc_id}"
+
+
+def test_arizona_action_versions_are_ordered_by_document_number(client):
+    # stored higher-number-first; the api must still list the lower number first
+    with _temp_bill(
+        "HB 9368",
+        [
+            ("Introduced Version", [("https://x.test/intro.pdf", "application/pdf", "a")]),
+            ("HOUSE - Appropriations", [(_az(537720), "application/pdf", "c")]),
+            ("HOUSE - Education", [(_az(537487), "application/pdf", "b")]),
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+    assert [v["note"] for v in versions] == [
+        "Introduced Version",
+        "HOUSE - Education",
+        "HOUSE - Appropriations",
+    ]
+
+
+def test_versions_without_a_document_number_keep_their_order(client):
+    with _temp_bill(
+        "HB 9369",
+        [
+            ("Introduced", [("https://x.test/a.pdf", "application/pdf", "a")]),
+            ("Enrolled", [("https://x.test/c.pdf", "application/pdf", "c")]),
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+    assert [v["note"] for v in versions] == ["Introduced", "Enrolled"]
