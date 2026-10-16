@@ -517,6 +517,28 @@ def test_pick_current_docs_later_stage_wins_regardless_of_row_order():
     assert sp.pick_current_docs(list(reversed(docs))) == {"b": 1}
 
 
+def test_pick_current_docs_orders_arizona_action_documents_by_document_number():
+    """OPEN-368: tied "HOUSE - ..." versions resolve by the number in the PDF's URL; the HTML
+    twin has none, so a version's number comes from all of its documents."""
+
+    def az(i, note, doc_number, media="application/pdf"):
+        url = (
+            f"https://apps.azleg.gov/BillStatus/GetDocumentPdf/{doc_number}"
+            if doc_number
+            else "https://x.test/twin.html"
+        )
+        return (i, "b", note, "", media, 10, url)
+
+    docs = [
+        az(1, "HOUSE - Appropriations", 537720),
+        az(2, "HOUSE - Appropriations", None, "text/html"),
+        az(3, "HOUSE - Education", 537487),
+        az(4, "HOUSE - Education", None, "text/html"),
+    ]
+    assert sp.pick_current_docs(docs) == {"b": 1}
+    assert sp.pick_current_docs(docs[::-1]) == {"b": 1}
+
+
 def test_pick_current_docs_prefers_pdf_within_one_version():
     docs = [
         _doc(1, "b", "Introduced", "application/pdf"),

@@ -113,7 +113,8 @@ STALE_COUNT_SQL = text("SELECT count(*) " + _STALE_FROM_WHERE)
 
 DOCS_SQL = text(
     """
-    SELECT id, bill_id, version_note, version_date, media_type, char_length(raw_text) AS n_chars
+    SELECT id, bill_id, version_note, version_date, media_type, char_length(raw_text) AS n_chars,
+           source_url
     FROM ddp_bill_version_document
     WHERE bill_id = ANY(:bill_ids) AND NOT is_error AND coalesce(raw_text, '') <> ''
 """
@@ -222,7 +223,14 @@ def pick_current_docs(rows) -> Dict[str, int]:
     the last; within one version prefer the PDF, matching archive_bill_versions()'s diff lineage.
     """
     by_bill: Dict[str, list] = {}
-    for doc_id, bill_id, note, date, media_type, _n_chars in rows:
+    # A version's number comes from all of its documents (the PDF carries it, an HTML twin may
+    # not), so both documents of one version sort alike. Rows without a URL column (tests) have none.
+    urls_by_version: Dict[tuple, list] = {}
+    for doc_id, bill_id, note, date, media_type, _n_chars, *rest in rows:
+        urls_by_version.setdefault((bill_id, note or "", date or ""), []).append(
+            rest[0] if rest else None
+        )
+    for doc_id, bill_id, note, date, media_type, _n_chars, *_rest in rows:
         if note_stage(note or "")[0] == STAGE_UNKNOWN:
             continue
         by_bill.setdefault(bill_id, []).append(
@@ -232,7 +240,7 @@ def pick_current_docs(rows) -> Dict[str, int]:
     for bill_id, docs in by_bill.items():
         docs.sort(
             key=lambda d: (
-                version_sort_key(d[1], d[2]),
+                version_sort_key(d[1], d[2], urls_by_version[(bill_id, d[1], d[2])]),
                 d[3] == "application/pdf",
                 d[0],
             )

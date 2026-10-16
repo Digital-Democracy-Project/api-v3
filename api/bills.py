@@ -202,7 +202,12 @@ class BillPagination(Pagination):
 
         if not classifiable:
             return
-        ordered = sorted(classifiable, key=lambda v: version_sort_key(v.note, v.date))
+        ordered = sorted(
+            classifiable,
+            key=lambda v: version_sort_key(
+                v.note, v.date, [link.url for link in v.links]
+            ),
+        )
 
         # OPEN-118: every classifiable version gets its own archived raw_text and
         # diff_from_previous_version resolved here, not just the latest version and the one
