@@ -694,7 +694,10 @@ def test_arizona_action_versions_are_ordered_by_document_number(client):
     with _temp_bill(
         "HB 9368",
         [
-            ("Introduced Version", [("https://x.test/intro.pdf", "application/pdf", "a")]),
+            (
+                "Introduced Version",
+                [("https://x.test/intro.pdf", "application/pdf", "a")],
+            ),
             ("HOUSE - Appropriations", [(_az(537720), "application/pdf", "c")]),
             ("HOUSE - Education", [(_az(537487), "application/pdf", "b")]),
         ],
