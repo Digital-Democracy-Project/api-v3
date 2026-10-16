@@ -553,6 +553,7 @@ def ohio():
         com_mem1,
         com_mem2,
         *create_test_bills_with_archived_versions(ls2021, leg),
+        *create_test_bills_with_votes(ls2021, leg),
     ]
 
 
@@ -567,6 +568,56 @@ def mentor():
         latest_people_update=datetime.datetime(2021, 8, 2),
     )
     return [j]
+
+
+def create_test_bills_with_votes(session, chamber):
+    """OPEN-377: bills for /bills?vote_updated_since=, each with an explicit, old
+    Bill.updated_at so a vote updated later than its bill is distinguishable from
+    updated_since. Identifiers are distinct from every other fixture bill's."""
+
+    def bill(n, title):
+        return Bill(
+            id=f"ocd-bill/votes-{n:04d}",
+            identifier=f"HB 92{n:02d}",
+            title=title,
+            legislative_session=session,
+            from_organization=chamber,
+            subject=[],
+            classification=["bill"],
+            extras={},
+            created_at=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+            updated_at=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+            latest_action_date="2025-01-01",
+        )
+
+    def vote(n, bill, year, month):
+        return VoteEvent(
+            id=f"ocd-vote/votes-{n}",
+            bill=bill,
+            identifier=f"Vote {n}",
+            motion_text="Floor Vote",
+            start_date=f"{year}-{month:02d}-01",
+            result="passed",
+            organization=chamber,
+            updated_at=datetime.datetime(year, month, 1, tzinfo=datetime.timezone.utc),
+        )
+
+    late_vote_bill = bill(
+        1, "An Act Relating to Owls"
+    )  # vote imported long after the bill
+    old_vote_bill = bill(2, "An Act Relating to Herons")  # only an old vote
+    no_vote_bill = bill(3, "An Act Relating to Wrens")  # no vote at all
+    two_votes_bill = bill(4, "An Act Relating to Finches")  # two recent votes
+    return [
+        late_vote_bill,
+        old_vote_bill,
+        no_vote_bill,
+        two_votes_bill,
+        vote("1a", late_vote_bill, 2026, 3),
+        vote("2a", old_vote_bill, 2025, 2),
+        vote("4a", two_votes_bill, 2026, 3),
+        vote("4b", two_votes_bill, 2026, 4),
+    ]
 
 
 def create_test_bills_with_archived_versions(session, chamber):

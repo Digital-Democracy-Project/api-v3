@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, ForeignKey, Integer, Text
+from sqlalchemy import Column, DateTime, String, ForeignKey, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from sqlalchemy.orm import relationship
 from .. import Base
@@ -18,6 +18,9 @@ class VoteEvent(Base):
     start_date = Column(String)
     result = Column(String)
     extras = Column(JSONB, default=dict)
+    # OPEN-377: mapped so /bills?vote_updated_since= can filter on it. The importer bumps a vote
+    # event's own updated_at when the vote changes; it never touches Bill.updated_at for it.
+    updated_at = Column(DateTime(timezone=True))
 
     organization_id = Column(String, ForeignKey(Organization.id))
     organization = relationship(Organization)

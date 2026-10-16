@@ -120,6 +120,50 @@ def test_bills_filter_by_document_updated_since(client):
     assert "ocd-bill/archived-0001" not in {b["id"] for b in response.json()["results"]}
 
 
+def test_bills_filter_by_vote_updated_since(client):
+    """OPEN-377: bills with a vote event updated at or after the cutoff, independent of
+    Bill.updated_at (which the importer does not bump for a vote)."""
+    response = client.get("/bills?jurisdiction=oh&vote_updated_since=2026-01-01")
+    ids = [b["id"] for b in response.json()["results"]]
+    # a vote updated in 2026 on a bill last updated in 2025 is found ...
+    assert "ocd-bill/votes-0001" in ids
+    # ... and a bill with two matching votes appears exactly once (subquery, not a join)
+    assert ids.count("ocd-bill/votes-0004") == 1
+    # a bill whose only vote is older, and a bill with no vote at all, are not
+    assert "ocd-bill/votes-0002" not in ids
+    assert "ocd-bill/votes-0003" not in ids
+    # votes that carry no updated_at (the older fixtures) never match
+    assert "ocd-bill/hb1" not in ids and len(ids) == 2
+
+    # the same bills are NOT found by updated_since: that is the gap this filter closes
+    response = client.get("/bills?jurisdiction=oh&updated_since=2026-01-01")
+    assert "ocd-bill/votes-0001" not in {b["id"] for b in response.json()["results"]}
+
+    # the cutoff is inclusive, and a later cutoff drops the March vote but keeps the April one
+    ids = {
+        b["id"]
+        for b in client.get(
+            "/bills?jurisdiction=oh&vote_updated_since=2026-03-01T00:00:00"
+        ).json()["results"]
+    }
+    assert ids == {"ocd-bill/votes-0001", "ocd-bill/votes-0004"}
+    ids = {
+        b["id"]
+        for b in client.get(
+            "/bills?jurisdiction=oh&vote_updated_since=2026-03-15"
+        ).json()["results"]
+    }
+    assert ids == {"ocd-bill/votes-0004"}
+
+    response = client.get("/bills?jurisdiction=oh&vote_updated_since=2032-01-01")
+    assert response.json()["results"] == []
+
+
+def test_bills_vote_updated_since_rejects_a_bad_date(client):
+    response = client.get("/bills?jurisdiction=oh&vote_updated_since=not-a-date")
+    assert response.status_code == 400
+
+
 def test_bills_filter_by_created_since(client):
     response = client.get("/bills?jurisdiction=ne&created_since=2020-01-01T00:00")
     assert len(response.json()["results"]) == 7
