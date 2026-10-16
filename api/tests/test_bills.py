@@ -159,6 +159,31 @@ def test_bills_filter_by_vote_updated_since(client):
     assert response.json()["results"] == []
 
 
+def test_bills_vote_updated_since_honours_an_explicit_offset(client):
+    """An offset moves the instant. (A negative offset is used: Starlette 0.21's TestClient
+    turns the "+" of "+00:00" into a space, which a real HTTP client does not.)"""
+
+    def found(since):
+        response = client.get(
+            "/bills", params={"jurisdiction": "oh", "vote_updated_since": since}
+        )
+        assert response.status_code == 200
+        return {b["id"] for b in response.json()["results"]}
+
+    # 2026-03-14T19:00 at -05:00 is 2026-03-15T00:00 UTC: after the March vote, before April's
+    assert found("2026-03-14T19:00:00-05:00") == {"ocd-bill/votes-0004"}
+    # 2026-04-01T00:00 at -05:00 is 05:00 UTC, after the April-1 00:00 UTC vote
+    assert found("2026-04-01T00:00:00-05:00") == set()
+    # the same instant with no offset is read as UTC
+    assert found("2026-03-15T00:00:00") == {"ocd-bill/votes-0004"}
+    # a trailing Z is not accepted on Python 3.9, as for every other *_since filter here
+    z = client.get(
+        "/bills",
+        params={"jurisdiction": "oh", "vote_updated_since": "2026-03-15T00:00:00Z"},
+    )
+    assert z.status_code == 400
+
+
 def test_bills_vote_updated_since_rejects_a_bad_date(client):
     response = client.get("/bills?jurisdiction=oh&vote_updated_since=not-a-date")
     assert response.status_code == 400
