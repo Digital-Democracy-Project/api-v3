@@ -314,6 +314,18 @@ async def bills_search(
             "not necessarily show up under updated_since."
         ),
     ),
+    vote_updated_since: Optional[str] = Query(
+        None,
+        description=(
+            "Filter to only include bills with a vote event updated since a given date. "
+            "OPEN-377: distinct from updated_since -- the importer saves vote events on their "
+            "own and does not bump Bill.updated_at for them, so a vote imported after its "
+            "bill last changed does not show up under updated_since. Send an explicit UTC "
+            "offset (2026-03-01T00:00:00+00:00, with the + sent as %2B in a URL); a value "
+            "without one is read as UTC, and a trailing Z is rejected (Python 3.9), as for "
+            "the other *_since filters."
+        ),
+    ),
     action_since: Optional[str] = Query(
         None,
         description="Filter to only include bills with an action since a given date.",
@@ -421,6 +433,17 @@ async def bills_search(
                 models.Bill.id.in_(
                     db.query(models.BillVersionDocument.bill_id).filter(
                         models.BillVersionDocument.updated_at >= document_cutoff
+                    )
+                )
+            )
+        if vote_updated_since:
+            # OPEN-377: same shape as document_updated_since -- an `in_(subquery)`, so a bill
+            # with several matching vote events is returned once.
+            vote_cutoff = datetime.datetime.fromisoformat(vote_updated_since)
+            query = query.filter(
+                models.Bill.id.in_(
+                    db.query(models.VoteEvent.bill_id).filter(
+                        models.VoteEvent.updated_at >= vote_cutoff
                     )
                 )
             )

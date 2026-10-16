@@ -120,6 +120,75 @@ def test_bills_filter_by_document_updated_since(client):
     assert "ocd-bill/archived-0001" not in {b["id"] for b in response.json()["results"]}
 
 
+def test_bills_filter_by_vote_updated_since(client):
+    """OPEN-377: bills with a vote event updated at or after the cutoff, independent of
+    Bill.updated_at (which the importer does not bump for a vote)."""
+    response = client.get("/bills?jurisdiction=oh&vote_updated_since=2026-01-01")
+    ids = [b["id"] for b in response.json()["results"]]
+    # a vote updated in 2026 on a bill last updated in 2025 is found ...
+    assert "ocd-bill/votes-0001" in ids
+    # ... and a bill with two matching votes appears exactly once (subquery, not a join)
+    assert ids.count("ocd-bill/votes-0004") == 1
+    # a bill whose only vote is older, and a bill with no vote at all, are not
+    assert "ocd-bill/votes-0002" not in ids
+    assert "ocd-bill/votes-0003" not in ids
+    # votes that carry no updated_at (the older fixtures) never match
+    assert "ocd-bill/hb1" not in ids and len(ids) == 2
+
+    # the same bills are NOT found by updated_since: that is the gap this filter closes
+    response = client.get("/bills?jurisdiction=oh&updated_since=2026-01-01")
+    assert "ocd-bill/votes-0001" not in {b["id"] for b in response.json()["results"]}
+
+    # the cutoff is inclusive, and a later cutoff drops the March vote but keeps the April one
+    ids = {
+        b["id"]
+        for b in client.get(
+            "/bills?jurisdiction=oh&vote_updated_since=2026-03-01T00:00:00"
+        ).json()["results"]
+    }
+    assert ids == {"ocd-bill/votes-0001", "ocd-bill/votes-0004"}
+    ids = {
+        b["id"]
+        for b in client.get(
+            "/bills?jurisdiction=oh&vote_updated_since=2026-03-15"
+        ).json()["results"]
+    }
+    assert ids == {"ocd-bill/votes-0004"}
+
+    response = client.get("/bills?jurisdiction=oh&vote_updated_since=2032-01-01")
+    assert response.json()["results"] == []
+
+
+def test_bills_vote_updated_since_honours_an_explicit_offset(client):
+    """An offset moves the instant. (A negative offset is used: Starlette 0.21's TestClient
+    turns the "+" of "+00:00" into a space, which a real HTTP client does not.)"""
+
+    def found(since):
+        response = client.get(
+            "/bills", params={"jurisdiction": "oh", "vote_updated_since": since}
+        )
+        assert response.status_code == 200
+        return {b["id"] for b in response.json()["results"]}
+
+    # 2026-03-14T19:00 at -05:00 is 2026-03-15T00:00 UTC: after the March vote, before April's
+    assert found("2026-03-14T19:00:00-05:00") == {"ocd-bill/votes-0004"}
+    # 2026-04-01T00:00 at -05:00 is 05:00 UTC, after the April-1 00:00 UTC vote
+    assert found("2026-04-01T00:00:00-05:00") == set()
+    # the same instant with no offset is read as UTC
+    assert found("2026-03-15T00:00:00") == {"ocd-bill/votes-0004"}
+    # a trailing Z is not accepted on Python 3.9, as for every other *_since filter here
+    z = client.get(
+        "/bills",
+        params={"jurisdiction": "oh", "vote_updated_since": "2026-03-15T00:00:00Z"},
+    )
+    assert z.status_code == 400
+
+
+def test_bills_vote_updated_since_rejects_a_bad_date(client):
+    response = client.get("/bills?jurisdiction=oh&vote_updated_since=not-a-date")
+    assert response.status_code == 400
+
+
 def test_bills_filter_by_created_since(client):
     response = client.get("/bills?jurisdiction=ne&created_since=2020-01-01T00:00")
     assert len(response.json()["results"]) == 7
