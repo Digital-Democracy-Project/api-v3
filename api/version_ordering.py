@@ -247,7 +247,7 @@ _AZ_ORIGIN_RE = re.compile(r"\A([HS])[A-Z]*\s*\d", re.IGNORECASE)
 
 
 def origin_chamber(identifier: typing.Optional[str]) -> typing.Optional[str]:
-    """ "house" or "senate" from a bill identifier like "HB 2014" or "SCR 1049", else None."""
+    """Return house or senate for an identifier like HB 2014 or SCR 1049, else None."""
     m = _AZ_ORIGIN_RE.match((identifier or "").strip())
     if not m:
         return None
