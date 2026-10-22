@@ -14,6 +14,7 @@ from . import (
     events,
     ddp_search,
     ddp_embedding,
+    ddp_enrollment,
 )
 
 if "SENTRY_URL" in os.environ:
@@ -27,6 +28,7 @@ app.include_router(committees.router)
 app.include_router(events.router)
 app.include_router(ddp_search.router)
 app.include_router(ddp_embedding.router)
+app.include_router(ddp_enrollment.router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
