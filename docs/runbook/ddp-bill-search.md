@@ -119,8 +119,8 @@ docker exec ddp-openstates-api-1 python -m api.search_projection refresh --juris
 (The production figures differ, notably the first build: see section 7.)
 
 Setup: local Docker Postgres 16 (`openstates` database, an older copy of production, 75,805 bills in 10
-jurisdictions with data to 2026-09-01; the 8 enrolled ones are US, FL, MI, AZ, VA, WA, UT, NC, and MA and AL
-are also present locally but not enrolled, 199,302 archived documents holding 3.02 billion characters of full-length text, the largest
+jurisdictions with data to 2026-09-01; the 8 enrolled when this was measured (2026-09) were US, FL, MI, AZ, VA, WA, UT, NC, and MA and AL
+were also present locally but not enrolled (the current list is `ddp-open-states/jurisdictions.yaml`; production's was 7, without NC, on 2026-10-22), 199,302 archived documents holding 3.02 billion characters of full-length text, the largest
 7,037,662 characters, `shared_buffers` 128 MB), the api-v3 code from this branch on its own port with
 `apikey_auth` overridden (so auth and the `ddp-api` hop are NOT in these numbers), one uvicorn worker, requests
 over localhost HTTP. The same Postgres server also hosts the replica database that serves LegBot, so
