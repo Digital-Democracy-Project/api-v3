@@ -26,8 +26,9 @@ search: since OPEN-312 the Mac replica's publication carries 47 tables, includin
 so the earlier statement that the Mac subscriber lacks them (plan 4.5.6, written when the publication
 carried 7 tables) no longer holds. The RDS-backed one remains the default because it is authoritative
 (the replica trails by seconds and lost its connection for about 3h50m on 2026-09-27) and because
-building on the Mac writes a table into the database LegBot reads. Known gap on both: the Mac replica has
-0 NC people (the Mac's scrape database has 508); check RDS before relying on NC legislator search.
+building on the Mac writes a table into the database LegBot reads. (An earlier version of this paragraph
+named a gap: 0 NC people. Closed 2026-10-22, when the prod agent loaded NC's legislators into RDS; on
+2026-10-25 the Mac api-v3 and the production api-v3 both return 173 NC people.)
 Three things must name the SAME instance, or search silently reads a stale or incomplete table:
 
 - where `ensure` and the first build were run,
@@ -170,10 +171,11 @@ Run on 2026-09-30 by the production agent and the user. Times UTC. Stop conditio
 | 8 | Importer advances `Bill.updated_at` on an abstract change | **Not done.** Needs a non-production database. Read from code only (section 6). |
 | 9 | `start-os-api.sh` ensure block; refresh hook | **Not done.** The boot block waits until the Mac `api` image is rebuilt and the import check passes there. **Nothing refreshes `ddp_bill_search` yet:** no caller exists until SYNC-87 (or a scheduled call) is built, so new or changed bills will not appear until someone runs `refresh`. A no-op sweep costs about 26 s, so per-jurisdiction refreshes are cheaper. |
 
-**NC people gap.** RDS has 0 people for North Carolina (4,088 in total, the same as the Mac replica). The Mac's
-own scrape database has 508 NC people that were never loaded into RDS, so legislator-name search finds nothing
-for NC. Bill search for NC is unaffected. Loading them into RDS is what would fix it; that is not part of this
-deploy.
+**NC people gap (as found on deploy day; since closed).** RDS had 0 people for North Carolina (4,088 in total, the same as the Mac replica). The Mac's
+own scrape database had 508 NC people that were never loaded into RDS, so legislator-name search found nothing
+for NC. Bill search for NC was unaffected. **Closed 2026-10-22:** the prod agent loaded NC's legislators into RDS
+(BROKER-302 flip 7, step D); on 2026-10-25 both api-v3 instances return 173 NC people. Re-run the `people` coverage
+column before relying on this on a database you have not checked.
 
 **Not measured on RDS:** the worst-case refresh statement with full-length documents, and RDS free storage
 (the build completed, so there was enough; the margin is unknown).
