@@ -166,6 +166,18 @@ Known slow shapes (measured, not fixed here; tuning belongs with the judged set,
   once the pool is full. On a scratch copy of the dev table (77,000 bills, median of 3): `act` all-state 274 to 85 ms,
   `housing` 277 to 100; `education` 99 to 118; rare words, single-state and two-word queries unchanged. The query must
   keep `ORDER BY s.latest_action_date DESC NULLS LAST, s.bill_id` exactly, or the index cannot be used.
+  **Production rollout (create the index first, then deploy).** The first boot with this code would build the index
+  inside `ensure_schema`'s transaction (a plain `CREATE INDEX`, which blocks writes to `ddp_bill_search` while it builds).
+  On a 77,000-row table that is a fraction of a second, but production was not measured, so build it beforehand:
+  `SET lock_timeout = '5s'; CREATE INDEX CONCURRENTLY IF NOT EXISTS ddp_bill_search_recency_idx ON ddp_bill_search
+  (latest_action_date DESC NULLS LAST, bill_id);` (outside a transaction), then check
+  `SELECT indisvalid FROM pg_index WHERE indexrelid = 'ddp_bill_search_recency_idx'::regclass` is true (a failed
+  concurrent build leaves an invalid index that `IF NOT EXISTS` would keep; drop it and retry). Because the query from
+  #36 is already deployed, the index takes effect at once, with no restart. Then run `EXPLAIN (ANALYZE, BUFFERS)` and
+  the six all-state timings (act, state, school, health, public, hemp) before and after. Keep it if `act` and `state`
+  are under 0.5 s and no measured query is more than 20% slower; otherwise `DROP INDEX CONCURRENTLY
+  ddp_bill_search_recency_idx` (nothing depends on it). Deploy this code after that, so the boot finds the index
+  already there.
 - `suggest` for very short inputs with few trigrams (`Med`, `S 1`) takes about 150 ms, because the title
   trigram index returns 5,000 to 9,000 candidates. That is already at the plan's 150 ms bar before the
   `ddp-api` hop is added, so the production hop measurement below matters.
