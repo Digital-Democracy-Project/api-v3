@@ -40,10 +40,22 @@ _likely_bill_id = re.compile(
     r"|(?:[A-Za-z]\.?){1,7}[\s-]+[A-Za-z]{1,2}"
 )
 
-_BILL_COLUMNS = """
-    s.bill_id, s.jurisdiction_id, s.session_identifier, s.identifier, s.title, s.chamber,
-    s.latest_action_date, s.latest_action_description
-"""
+
+def _bill_columns(alias: str) -> str:
+    names = (
+        "bill_id",
+        "jurisdiction_id",
+        "session_identifier",
+        "identifier",
+        "title",
+        "chamber",
+        "latest_action_date",
+        "latest_action_description",
+    )
+    return ", ".join(f"{alias}.{name}" for name in names)
+
+
+_BILL_COLUMNS = _bill_columns("s")
 
 # Optional exact-session scope, shared by every bill query. People are not session-scoped.
 _SESSION_FILTER = (
@@ -74,18 +86,40 @@ EXACT_SQL = text(
 """
 )
 
-FTS_SQL = text(
-    f"""
-    WITH hits AS (
-        SELECT {_BILL_COLUMNS}, ts_rank_cd(s.fts, query)::float AS score
+# OPEN-398: the full-text leg ranks only the FTS_RANK_POOL most recent matching bills, not every match.
+# ts_rank_cd reads each bill's whole stored text vector (3.5 KB on average), so ranking every match cost time in
+# proportion to the number of matches (about 20 microseconds each): 0.25 to 0.6 s on dev for a common word across
+# every jurisdiction ("school" 12,623 matches, "act" 62,461), 1.2 s or more on production. A query with no more
+# than FTS_RANK_POOL matches is ranked exactly as before; for a word that matches more bills than that, the top 100
+# come from the most recent FTS_RANK_POOL of them. Such a word discriminates little; titles are covered by the
+# fuzzy-title leg, and the broker fuses this leg with the semantic one. 5,000 keeps the text-leg results of every judged
+# query the same except "S 1" and "HB 1", which the exact tier answers (the other judged text queries match fewer than
+# 700 bills), and measured 80 to 280 ms on dev for the common words that took 0.2 to 0.56 s. What remains for a word
+# that is in most bills is finding the matches.
+FTS_RANK_POOL = 5000
+
+
+def _fts_sql(pool: int):
+    return text(
+        f"""
+    WITH pool AS (
+        SELECT {_BILL_COLUMNS}, s.fts
         FROM ddp_bill_search s, websearch_to_tsquery('english', :q) query
         WHERE s.fts @@ query AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
-        ORDER BY score DESC, s.latest_action_date DESC NULLS LAST
+        ORDER BY s.latest_action_date DESC NULLS LAST, s.bill_id
+        LIMIT {int(pool)}
+    ), hits AS (
+        SELECT {_bill_columns("p")}, ts_rank_cd(p.fts, websearch_to_tsquery('english', :q))::float AS score
+        FROM pool p
+        ORDER BY score DESC, p.latest_action_date DESC NULLS LAST, p.bill_id
         LIMIT :limit
     )
     SELECT hits.*, ab.snippet FROM hits {_SNIPPET_LATERAL}
 """
-)
+    )
+
+
+FTS_SQL = _fts_sql(FTS_RANK_POOL)
 
 FUZZY_TITLE_SQL = text(
     f"""

@@ -145,7 +145,19 @@ these are not lab-quiet numbers.
 Known slow shapes (measured, not fixed here; tuning belongs with the judged set, plan section 9):
 
 - `GET /ddp/search?q=S 1` takes about 1.25 s every time. The token `1` matches a large share of all
-  documents and `ts_rank_cd` ranks every one of them (about 0.5 s in SQL alone).
+  documents and `ts_rank_cd` ranks every one of them (about 0.5 s in SQL alone). **OPEN-398 (see "Full-text ranking pool" below):** the full-text leg now ranks only
+  the 5,000 most recent matches (`FTS_RANK_POOL`), so a word in many bills costs 80 to 280 ms on dev instead of 0.2 to
+  0.56 s (school 237 to 93 ms, health 380 to 104, public 551 to 112, act 397 to 280). A query with 5,000 or fewer
+  matches ranks exactly as before; above that the top 100 come from the most recent 5,000. What is left for a word in
+  most bills (`state`, `act`: 280 ms) is finding the matches, not ranking them.
+- **Full-text ranking pool (OPEN-398).** The full-text leg ranks only the `FTS_RANK_POOL` (5,000) most recent matching
+  bills, after the jurisdiction and session filters. For any query that matches more bills than that (a common word such
+  as `school`, `health`, `public`, `act`), a bill older than the newest 5,000 matches cannot reach the top 100, however well
+  it would rank; overlap with the old top 100 on dev was school 48, tax 69, health 31, public 12 of 100. Queries with 5,000 or
+  fewer matches rank the same bills as before (ties now break on `bill_id`, the primary key, so equal-score equal-date
+  bills come back in a fixed order). The judged set has no query in the affected class (its broad queries match under 650
+  bills; the larger ones are exact-number queries). To widen it, raise `FTS_RANK_POOL` (about 18 ms per 1,000 on dev); to undo it,
+  revert the commit. Do not lower the broker's `SEARCH_OPENSTATES_TIMEOUT_SECONDS` until production is measured.
 - `suggest` for very short inputs with few trigrams (`Med`, `S 1`) takes about 150 ms, because the title
   trigram index returns 5,000 to 9,000 candidates. That is already at the plan's 150 ms bar before the
   `ddp-api` hop is added, so the production hop measurement below matters.

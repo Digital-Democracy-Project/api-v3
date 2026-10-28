@@ -402,6 +402,77 @@ def test_search_full_text_finds_archived_document_text(built, api):
     assert r["text"][0]["score"] > 0
 
 
+def _set_fts(bill_id, words, date):
+    """Give a projected bill a title-weight vector of `words` and a latest-action date, to control rank and recency."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE ddp_bill_search SET fts = setweight(to_tsvector('english', :w), 'A'), "
+                "latest_action_date = :d WHERE bill_id = :b"
+            ),
+            {"w": words, "d": date, "b": bill_id},
+        )
+
+
+OLD, NEW = "ocd-bill/t309-ak-1", "ocd-bill/t309-wy-1"
+
+
+def test_full_text_ranks_every_match_when_there_are_fewer_than_the_pool(built, api):
+    """OPEN-398: below FTS_RANK_POOL matches nothing changes: the best-ranked bill comes first even when it is old."""
+    _set_fts(OLD, "medicaid medicaid medicaid", "2020-01-01")
+    _set_fts(NEW, "medicaid", "2026-06-01")
+    r = api.get(
+        "/ddp/search", params={"q": "medicaid", "jurisdiction": ["AK", "WY"]}
+    ).json()
+    assert _ids(r["text"]) == [OLD, NEW]
+    assert r["text"][0]["score"] > r["text"][1]["score"]
+
+
+def test_full_text_ranks_only_the_most_recent_matches_beyond_the_pool(
+    built, api, monkeypatch
+):
+    """OPEN-398: a word in more bills than the pool is ranked among the most recent ones only (here a pool of 1)."""
+    _set_fts(OLD, "medicaid medicaid medicaid", "2020-01-01")
+    _set_fts(NEW, "medicaid", "2026-06-01")
+    monkeypatch.setattr(ddp_search, "FTS_SQL", ddp_search._fts_sql(1))
+    r = api.get(
+        "/ddp/search", params={"q": "medicaid", "jurisdiction": ["AK", "WY"]}
+    ).json()
+    assert _ids(r["text"]) == [NEW]
+
+
+def test_full_text_pool_boundary_and_filters(built, api, monkeypatch):
+    """A pool as large as the match count ranks them all; the jurisdiction filter applies before the pool is cut."""
+    _set_fts(OLD, "medicaid medicaid medicaid", "2020-01-01")
+    _set_fts(NEW, "medicaid", "2026-06-01")
+    monkeypatch.setattr(ddp_search, "FTS_SQL", ddp_search._fts_sql(2))
+    both = api.get(
+        "/ddp/search", params={"q": "medicaid", "jurisdiction": ["AK", "WY"]}
+    ).json()
+    assert _ids(both["text"]) == [OLD, NEW]
+    monkeypatch.setattr(ddp_search, "FTS_SQL", ddp_search._fts_sql(1))
+    only_ak = api.get(
+        "/ddp/search", params={"q": "medicaid", "jurisdiction": ["AK"]}
+    ).json()
+    assert _ids(only_ak["text"]) == [
+        OLD
+    ]  # the newer WY bill is not in the pool, so it cannot crowd AK out
+
+
+def test_full_text_ties_are_ordered_the_same_way_every_time(built, api):
+    _set_fts(OLD, "medicaid", "2026-06-01")
+    _set_fts(NEW, "medicaid", "2026-06-01")
+    ids = [
+        _ids(
+            api.get(
+                "/ddp/search", params={"q": "medicaid", "jurisdiction": ["AK", "WY"]}
+            ).json()["text"]
+        )
+        for _ in range(3)
+    ]
+    assert ids[0] == ids[1] == ids[2] == sorted([OLD, NEW])
+
+
 def test_search_tolerates_a_misspelled_title_and_orders_by_similarity(built, api):
     r = api.get(
         "/ddp/search", params={"q": "medicade expansion", "jurisdiction": ["AK", "WY"]}
