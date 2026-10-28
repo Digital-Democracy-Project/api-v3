@@ -171,13 +171,16 @@ Known slow shapes (measured, not fixed here; tuning belongs with the judged set,
   On a 77,000-row table that is a fraction of a second, but production was not measured, so build it beforehand:
   `SET lock_timeout = '5s'; CREATE INDEX CONCURRENTLY IF NOT EXISTS ddp_bill_search_recency_idx ON ddp_bill_search
   (latest_action_date DESC NULLS LAST, bill_id);` (outside a transaction), then check
-  `SELECT indisvalid FROM pg_index WHERE indexrelid = 'ddp_bill_search_recency_idx'::regclass` is true (a failed
-  concurrent build leaves an invalid index that `IF NOT EXISTS` would keep; drop it and retry). Because the query from
-  #36 is already deployed, the index takes effect at once, with no restart. Then run `EXPLAIN (ANALYZE, BUFFERS)` and
-  the six all-state timings (act, state, school, health, public, hemp) before and after. Keep it if `act` and `state`
-  are under 0.5 s and no measured query is more than 20% slower; otherwise `DROP INDEX CONCURRENTLY
-  ddp_bill_search_recency_idx` (nothing depends on it). Deploy this code after that, so the boot finds the index
-  already there.
+  `SELECT indisvalid, pg_get_indexdef(indexrelid) FROM pg_index WHERE indexrelid = 'ddp_bill_search_recency_idx'::regclass`
+  shows `t` and a definition ending `USING btree (latest_action_date DESC NULLS LAST, bill_id)` (`IF NOT EXISTS` checks only
+  the name, so a failed concurrent build leaves an invalid index it would keep, and a same-named index with another
+  definition would be kept too: for either, `DROP INDEX CONCURRENTLY ddp_bill_search_recency_idx` and run the create
+  again). Because the query from #36 is already deployed, the index takes effect at once, with no restart. Then run the
+  six all-state timings (act, state, school, health, public, hemp; one warm-up, then 5 runs each, median of the response's
+  `elapsed_ms`) before and after, and `EXPLAIN (ANALYZE, BUFFERS)` for `act`, which must show an Index Scan on
+  `ddp_bill_search_recency_idx` (without it, a timing gain is only cache). Keep it if `act` and `state` are under 0.5 s and
+  no measured query is more than 20% slower; otherwise `DROP INDEX CONCURRENTLY ddp_bill_search_recency_idx` (nothing
+  depends on it). Deploy this code after that, so the boot finds the index already there.
 - `suggest` for very short inputs with few trigrams (`Med`, `S 1`) takes about 150 ms, because the title
   trigram index returns 5,000 to 9,000 candidates. That is already at the plan's 150 ms bar before the
   `ddp-api` hop is added, so the production hop measurement below matters.

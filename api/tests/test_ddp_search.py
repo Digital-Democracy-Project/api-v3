@@ -467,11 +467,11 @@ def test_recency_index_matches_the_pool_order_the_query_uses(built):
         indexdef, valid = c.execute(
             text(
                 "SELECT pg_get_indexdef(i.indexrelid), i.indisvalid FROM pg_index i "
-                "JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = 'ddp_bill_search_recency_idx'"
+                "JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indexrelid = 'ddp_bill_search_recency_idx'::regclass"
             )
         ).one()
     assert valid
-    assert "(latest_action_date DESC NULLS LAST, bill_id)" in indexdef
+    assert indexdef.endswith("USING btree (latest_action_date DESC NULLS LAST, bill_id)")
     assert (
         "ORDER BY s.latest_action_date DESC NULLS LAST, s.bill_id"
         in str(ddp_search.FTS_SQL)
