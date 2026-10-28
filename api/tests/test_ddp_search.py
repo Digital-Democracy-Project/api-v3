@@ -441,6 +441,24 @@ def test_full_text_ranks_only_the_most_recent_matches_beyond_the_pool(
     assert _ids(r["text"]) == [NEW]
 
 
+def test_full_text_pool_boundary_and_filters(built, api, monkeypatch):
+    """A pool as large as the match count ranks them all; the jurisdiction filter applies before the pool is cut."""
+    _set_fts(OLD, "medicaid medicaid medicaid", "2020-01-01")
+    _set_fts(NEW, "medicaid", "2026-06-01")
+    monkeypatch.setattr(ddp_search, "FTS_SQL", ddp_search._fts_sql(2))
+    both = api.get(
+        "/ddp/search", params={"q": "medicaid", "jurisdiction": ["AK", "WY"]}
+    ).json()
+    assert _ids(both["text"]) == [OLD, NEW]
+    monkeypatch.setattr(ddp_search, "FTS_SQL", ddp_search._fts_sql(1))
+    only_ak = api.get(
+        "/ddp/search", params={"q": "medicaid", "jurisdiction": ["AK"]}
+    ).json()
+    assert _ids(only_ak["text"]) == [
+        OLD
+    ]  # the newer WY bill is not in the pool, so it cannot crowd AK out
+
+
 def test_full_text_ties_are_ordered_the_same_way_every_time(built, api):
     _set_fts(OLD, "medicaid", "2026-06-01")
     _set_fts(NEW, "medicaid", "2026-06-01")
