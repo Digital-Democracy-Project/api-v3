@@ -471,10 +471,11 @@ def test_recency_index_matches_the_pool_order_the_query_uses(built):
             )
         ).one()
     assert valid
-    assert indexdef.endswith("USING btree (latest_action_date DESC NULLS LAST, bill_id)")
-    assert (
-        "ORDER BY s.latest_action_date DESC NULLS LAST, s.bill_id"
-        in str(ddp_search.FTS_SQL)
+    assert indexdef.endswith(
+        "USING btree (latest_action_date DESC NULLS LAST, bill_id)"
+    )
+    assert "ORDER BY s.latest_action_date DESC NULLS LAST, s.bill_id" in str(
+        ddp_search.FTS_SQL
     )
 
 
