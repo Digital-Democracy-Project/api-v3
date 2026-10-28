@@ -158,29 +158,6 @@ Known slow shapes (measured, not fixed here; tuning belongs with the judged set,
   bills come back in a fixed order). The judged set has no query in the affected class (its broad queries match under 650
   bills; the larger ones are exact-number queries). To widen it, raise `FTS_RANK_POOL` (about 18 ms per 1,000 on dev); to undo it,
   revert the commit. Do not lower the broker's `SEARCH_OPENSTATES_TIMEOUT_SECONDS` until production is measured.
-- **The recency index (OPEN-398 follow-up).** The pool alone did not make a common word fast: without an index on
-  `(latest_action_date DESC NULLS LAST, bill_id)` Postgres still tests every bill's text vector to find the matches (a
-  parallel sequential scan, about 180 ms of the 270 ms for `act` on a copy of the dev table), and the production
-  all-state timings on 2026-10-28 were unchanged for `act`, `state` and `public`. `ddp_bill_search_recency_idx` (in
-  `DDL_STATEMENTS`, created on the next boot or refresh, `IF NOT EXISTS`) lets Postgres read bills newest first and stop
-  once the pool is full. On a scratch copy of the dev table (77,000 bills, median of 3): `act` all-state 274 to 85 ms,
-  `housing` 277 to 100; `education` 99 to 118; rare words, single-state and two-word queries unchanged. The query must
-  keep `ORDER BY s.latest_action_date DESC NULLS LAST, s.bill_id` exactly, or the index cannot be used.
-  **Production rollout (create the index first, then deploy).** The first boot with this code would build the index
-  inside `ensure_schema`'s transaction (a plain `CREATE INDEX`, which blocks writes to `ddp_bill_search` while it builds).
-  On a 77,000-row table that is a fraction of a second, but production was not measured, so build it beforehand:
-  `SET lock_timeout = '5s'; CREATE INDEX CONCURRENTLY IF NOT EXISTS ddp_bill_search_recency_idx ON ddp_bill_search
-  (latest_action_date DESC NULLS LAST, bill_id);` (outside a transaction), then check
-  `SELECT indisvalid, pg_get_indexdef(indexrelid) FROM pg_index WHERE indexrelid = 'ddp_bill_search_recency_idx'::regclass`
-  shows `t` and a definition ending `USING btree (latest_action_date DESC NULLS LAST, bill_id)` (`IF NOT EXISTS` checks only
-  the name, so a failed concurrent build leaves an invalid index it would keep, and a same-named index with another
-  definition would be kept too: for either, `DROP INDEX CONCURRENTLY ddp_bill_search_recency_idx` and run the create
-  again). Because the query from #36 is already deployed, the index takes effect at once, with no restart. Then run the
-  six all-state timings (act, state, school, health, public, hemp; one warm-up, then 5 runs each, median of the response's
-  `elapsed_ms`) before and after, and `EXPLAIN (ANALYZE, BUFFERS)` for `act`, which must show an Index Scan on
-  `ddp_bill_search_recency_idx` (without it, a timing gain is only cache). Keep it if `act` and `state` are under 0.5 s and
-  no measured query is more than 20% slower; otherwise `DROP INDEX CONCURRENTLY ddp_bill_search_recency_idx` (nothing
-  depends on it). Deploy this code after that, so the boot finds the index already there.
 - `suggest` for very short inputs with few trigrams (`Med`, `S 1`) takes about 150 ms, because the title
   trigram index returns 5,000 to 9,000 candidates. That is already at the plan's 150 ms bar before the
   `ddp-api` hop is added, so the production hop measurement below matters.

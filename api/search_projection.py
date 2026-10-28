@@ -73,7 +73,6 @@ EXPECTED_INDEXES = {
     "ddp_bill_search_title_idx",
     "ddp_bill_search_ident_idx",
     "ddp_bill_search_juris_idx",
-    "ddp_bill_search_recency_idx",
 }
 
 DDL_STATEMENTS = [
@@ -98,11 +97,6 @@ DDL_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS ddp_bill_search_title_idx ON ddp_bill_search USING gin (title gin_trgm_ops)",
     "CREATE INDEX IF NOT EXISTS ddp_bill_search_ident_idx ON ddp_bill_search (identifier_norm varchar_pattern_ops)",
     "CREATE INDEX IF NOT EXISTS ddp_bill_search_juris_idx ON ddp_bill_search (jurisdiction_id)",
-    # OPEN-398: the full-text leg keeps the FTS_RANK_POOL most recent matches (ORDER BY this exact expression, then
-    # LIMIT). With this index Postgres reads bills newest first and stops after the pool is full, instead of testing
-    # every bill's text vector; without it a word in most bills costs a full scan (about 270 ms on dev for "act").
-    "CREATE INDEX IF NOT EXISTS ddp_bill_search_recency_idx "
-    "ON ddp_bill_search (latest_action_date DESC NULLS LAST, bill_id)",
 ]
 
 # A bill needs (re)building when it has no row, or its own row or any archived document is newer

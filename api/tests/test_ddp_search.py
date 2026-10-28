@@ -459,26 +459,6 @@ def test_full_text_pool_boundary_and_filters(built, api, monkeypatch):
     ]  # the newer WY bill is not in the pool, so it cannot crowd AK out
 
 
-def test_recency_index_matches_the_pool_order_the_query_uses(built):
-    """OPEN-398: the pool query's ORDER BY and the recency index must stay the same expression, or Postgres can no
-    longer read newest first and stop early (the index would still exist, so no other test would notice)."""
-    with engine.connect() as c:
-        sp.ensure_schema(c)
-        indexdef, valid = c.execute(
-            text(
-                "SELECT pg_get_indexdef(i.indexrelid), i.indisvalid FROM pg_index i "
-                "JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indexrelid = 'ddp_bill_search_recency_idx'::regclass"
-            )
-        ).one()
-    assert valid
-    assert indexdef.endswith(
-        "USING btree (latest_action_date DESC NULLS LAST, bill_id)"
-    )
-    assert "ORDER BY s.latest_action_date DESC NULLS LAST, s.bill_id" in str(
-        ddp_search.FTS_SQL
-    )
-
-
 def test_full_text_ties_are_ordered_the_same_way_every_time(built, api):
     _set_fts(OLD, "medicaid", "2026-06-01")
     _set_fts(NEW, "medicaid", "2026-06-01")
