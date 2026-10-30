@@ -17,6 +17,7 @@ from api.db import get_db
 from api.db.models import (
     Bill,
     BillAbstract,
+    BillTitle,
     BillVersionDocument,
     Jurisdiction,
     LegislativeSession,
@@ -150,7 +151,11 @@ def world():
         c.execute(
             text("DELETE FROM opencivicdata_person WHERE id LIKE 'ocd-person/t309-%'")
         )
-        for table in ("ddp_bill_version_document", "opencivicdata_billabstract"):
+        for table in (
+            "ddp_bill_version_document",
+            "opencivicdata_billabstract",
+            "opencivicdata_billtitle",
+        ):
             c.execute(text(f"DELETE FROM {table} WHERE bill_id LIKE 'ocd-bill/t309-%'"))
         c.execute(
             text("DELETE FROM opencivicdata_bill WHERE id LIKE 'ocd-bill/t309-%'")
@@ -1136,3 +1141,213 @@ def test_only_refresh_is_a_write_route_and_all_routes_depend_on_apikey_auth():
     assert methods.pop("/ddp/search/refresh") == {"POST"}
     assert all(m == {"GET"} for m in methods.values())
     assert len(methods) == 4
+
+
+# --- alternate titles and the whole-phrase rank (OPEN-457) ---------------------------------------------
+
+OFFICIAL = "To provide for reconciliation pursuant to title II of H. Con. Res. 14."
+
+
+@pytest.fixture
+def titled(world, client, monkeypatch):
+    """HR 40 is like HR 1 of the 119th Congress: an official title and two other titles its authors gave it.
+    Three decoys share some of the phrase's words without containing it. Built through the real POST /refresh."""
+    db = world
+    hr = _bill(db, "ak", 40, "HR 40", OFFICIAL)
+    for title in (
+        "FEHB Protection Act of 2025",
+        "One Big Beautiful Bill Act",
+        OFFICIAL,
+    ):
+        db.add(BillTitle(bill_id=hr.id, title=title, note=""))
+    _bill(db, "ak", 41, "HB 41", "Make the District Safe and Beautiful Act")
+    _bill(db, "ak", 42, "HB 42", "A big bill for one beautiful school")
+    _bill(db, "ak", 43, "HB 43", "One Beautiful Bill for Big Beautiful Schools")
+    # all three words, repeated and close together, so it out-scores HR 40 on relevance, but never in the phrase's order
+    _bill(
+        db,
+        "ak",
+        44,
+        "HB 44",
+        "Beautiful Bill Big and Big Bill Beautiful and Bill Big Beautiful and Beautiful Big Bill",
+    )
+    # holds the phrase three times in a long title: more relevant than HR 40's one mention, but not the closer title
+    _bill(
+        db,
+        "ak",
+        46,
+        "HB 46",
+        "Big Beautiful Bill Big Beautiful Bill Big Beautiful Bill to Amend the One Big Beautiful Bill Act",
+    )
+    # the phrase is split ACROSS two of its other titles: it is in neither, so this bill must not match it
+    split = _bill(db, "ak", 47, "HB 47", "An Act Concerning Bridges")
+    for title in (
+        "Alpha One Big",
+        "Beautiful Bill Act Zulu",
+    ):  # sorted, so joined as "Alpha One Big\nBeautiful Bill Act Zulu"
+        db.add(BillTitle(bill_id=split.id, title=title, note=""))
+    wild = _bill(db, "ak", 45, "HB 45", "An Act Concerning Highway Signs")
+    db.add(BillTitle(bill_id=wild.id, title="Fiftyyy Fund Act", note=""))
+    db.commit()
+    monkeypatch.setattr(ddp_search, "engine", engine)
+    r = client.post("/ddp/search/refresh")
+    assert r.status_code == 200 and not r.json()["more"]
+    return world
+
+
+def _search(api, q, **extra):
+    r = api.get("/ddp/search", params={"q": q, "jurisdiction": "AK", **extra})
+    assert r.status_code == 200
+    return r.json()
+
+
+HR40 = "ocd-bill/t309-ak-40"
+
+
+def test_a_bill_is_found_by_an_alternate_title_and_keeps_its_own_title(titled, api):
+    for q in ("One Big Beautiful Bill", "FEHB Protection Act"):
+        body = _search(api, q)
+        assert HR40 in _ids(body["text"]), q
+        assert HR40 in _ids(body["names"]), q
+        hit = next(h for h in body["text"] if h["id"] == HR40)
+        assert (
+            hit["title"] == OFFICIAL
+        )  # the broker decides the display title, not this service
+
+
+def test_a_whole_phrase_title_match_ranks_first_in_the_text_list(titled, api):
+    body = _search(api, "Big Beautiful Bill")
+    assert _ids(body["text"])[0] == HR40  # the phrase is in its OTHER title only
+    assert _ids(body["names"])[0] == HR40
+    assert not any(
+        "_phrase_len" in h for h in body["names"] + body["text"]
+    )  # internal flag never leaves
+    # the decoys are still found, behind it (HB 44 would win on relevance alone: see the next test)
+    assert {"ocd-bill/t309-ak-42", "ocd-bill/t309-ak-43", "ocd-bill/t309-ak-44"} <= set(
+        _ids(body["text"])
+    )
+
+
+def test_among_phrase_matches_the_closest_title_comes_first(titled, api):
+    """HB 46 holds the phrase three times in a long title and out-scores HR 40 on relevance; HR 40's other title is
+    the phrase plus one word, so it is the closer match."""
+    ids = _ids(_search(api, "Big Beautiful Bill")["text"])
+    assert ids.index(HR40) < ids.index("ocd-bill/t309-ak-46")
+    names = _ids(_search(api, "Big Beautiful Bill")["names"])
+    assert names.index(HR40) < names.index("ocd-bill/t309-ak-46")
+
+
+def test_without_the_phrase_the_order_is_relevance_alone(titled, api):
+    """The decoy that repeats the words beats HR 40 when the query is not a phrase of HR 40's titles; this is what
+    makes the test above prove the phrase rank, not relevance."""
+    ids = _ids(_search(api, "Beautiful Bill Big Big")["text"])
+    assert ids[0] in (
+        "ocd-bill/t309-ak-44",
+        "ocd-bill/t309-ak-46",
+    )  # the word-repeating decoys, not HR 40
+    assert ids.index(HR40) > 1
+
+
+def test_a_main_title_phrase_match_also_ranks_first(titled, api):
+    body = _search(api, "Safe and Beautiful")
+    assert _ids(body["text"])[0] == "ocd-bill/t309-ak-41"
+
+
+def test_one_word_is_not_a_phrase(titled, api):
+    """ "beautiful" matches HR 40's other title and three decoys; with no phrase the order is text relevance alone, so
+    this must equal what the same query returned with the phrase rank off."""
+    with_rank = _ids(_search(api, "beautiful")["text"])
+    assert set(with_rank) >= {HR40, "ocd-bill/t309-ak-41", "ocd-bill/t309-ak-42"}
+    assert ddp_search._phrase("beautiful") is None
+    assert ddp_search._phrase("  One   Big  ") == "one big"
+
+
+def test_typeahead_finds_a_bill_by_an_alternate_title(titled, api):
+    r = api.get(
+        "/ddp/search/suggest", params={"q": "One Big Beautiful", "jurisdiction": "AK"}
+    )
+    assert HR40 in _ids(r.json()["results"])
+
+
+def test_a_bill_with_no_other_titles_is_unchanged(world, built, api):
+    body = _search(api, "Medicaid Expansion")
+    assert "ocd-bill/t309-ak-1" in _ids(body["text"])
+    with engine.connect() as c:
+        alt = c.execute(
+            text(
+                "SELECT alt_titles FROM ddp_bill_search WHERE bill_id = 'ocd-bill/t309-ak-1'"
+            )
+        ).scalar()
+    assert alt == ""
+
+
+def test_regex_characters_in_a_query_are_literal_in_the_other_titles_match(titled, api):
+    assert "ocd-bill/t309-ak-45" in _ids(_search(api, "Fiftyyy Fund")["names"])
+    for q in (
+        "fif.yyy fund",
+        "fif%y fund",
+        "fif_yyy fund",
+        "(fiftyyy|nope) fund",
+    ):  # wildcards or alternation if not escaped
+        assert "ocd-bill/t309-ak-45" not in _ids(_search(api, q)["names"]), q
+
+
+def test_a_phrase_split_across_two_other_titles_is_not_a_match(titled, api):
+    """alt_titles joins a bill's other titles with a newline; the phrase regex must not read across it."""
+    body = _search(api, "One Big Beautiful Bill")
+    assert "ocd-bill/t309-ak-47" not in _ids(body["names"])
+    assert "ocd-bill/t309-ak-47" not in _ids(
+        body["text"][:1]
+    )  # nor a phrase holder in the text leg
+    assert HR40 in _ids(body["names"])
+
+
+def test_a_half_typed_last_word_does_not_match_the_other_titles(titled, api):
+    """As-you-type and misspelt queries rank as before: the other titles are matched as whole words only (found by the
+    judged set: "daylight sav" must not be pushed around by alternate titles)."""
+    assert "ocd-bill/t309-ak-45" not in _ids(_search(api, "Fiftyyy Fu")["names"])
+    assert "ocd-bill/t309-ak-45" in _ids(_search(api, "Fiftyyy Fund")["names"])
+
+
+def test_a_single_word_is_not_matched_against_the_other_titles_in_the_names_list(
+    titled, api
+):
+    """One word is found by the full-text leg (the other titles are in `fts`); the names tier adds no alternate-title
+    scan for it, which is what keeps a common word as fast as before."""
+    body = _search(api, "Fiftyyy")
+    assert "ocd-bill/t309-ak-45" in _ids(body["text"])
+    assert "ocd-bill/t309-ak-45" not in _ids(body["names"])
+    assert ddp_search._like("Fiftyyy") is None
+    assert (
+        ddp_search._like("Big   Beautiful Bill") == r"\mbig[ \t]+beautiful[ \t]+bill\M"
+    )
+    assert ddp_search._like("a.b (c)") == r"\ma\.b[ \t]+\(c\)\M"
+    assert ddp_search._like("H.R. 1") is None  # a bill number is the exact tier's
+    assert ddp_search._like("HB 1C") is None
+    assert (
+        ddp_search._like("tax on") == r"\mtax[ \t]+on\M"
+    )  # two short words are still a phrase
+
+
+def test_a_single_word_runs_the_queries_that_had_no_phrase_terms(
+    titled, api, monkeypatch
+):
+    """What keeps a common word as fast as before OPEN-457 (60,000 candidates would each scan their titles): with one
+    word neither phrase query is touched, and the plain ones do not mention the other titles at all."""
+    boom = text("SELECT 1 / 0")
+    monkeypatch.setattr(ddp_search, "FTS_PHRASE_SQL", boom)
+    monkeypatch.setattr(ddp_search, "FUZZY_TITLE_PHRASE_SQL", boom)
+    assert "alt_titles" not in str(ddp_search.FTS_SQL) and "alt_titles" not in str(
+        ddp_search.FUZZY_TITLE_SQL
+    )
+    assert HR40 in _ids(
+        _search(api, "Fehb")["text"]
+    )  # one word: the full-text leg, through the plain query
+    suggest = api.get(
+        "/ddp/search/suggest", params={"q": "beautiful", "jurisdiction": "AK"}
+    )
+    assert suggest.status_code == 200
+    monkeypatch.undo()
+    assert "alt_titles" in str(ddp_search.FTS_PHRASE_SQL) and "alt_titles" in str(
+        ddp_search.FUZZY_TITLE_PHRASE_SQL
+    )
