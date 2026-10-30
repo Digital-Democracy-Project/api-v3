@@ -186,7 +186,7 @@ column before relying on this on a database you have not checked.
 line, never the official title) and an index `ddp_bill_search_alt_titles_idx`. The other titles are in the full-text vector at the
 title weight, so `/ddp/search` finds a bill by them. For a query of two or more words that is not a bill number, a bill whose title
 or other title contains the typed words in order, as whole words, ranks ahead of bills that only share some of them (the shortest
-such title first). A single word or a bill number runs the same SQL as before. The `title` returned is unchanged: the broker
+such title first). A single word or a bill number runs the same SQL as before, **but not the same results**: `alt_titles` is in the full-text vector, so a word is now also matched against a bill's other titles and the top 20 for a common word can change (production, section 8 results below). The `title` returned is unchanged: the broker
 decides the display title (BROKER-355, `Bill.catalogue_title`).
 
 **Rollout order matters (a new code image on an old table fails every search).** `ensure` runs only on `refresh`, never at boot,
@@ -253,3 +253,10 @@ The judged set (BROKER-162, 85 queries, `python manage.py run_search_eval --base
 - Run matrix: old code on the old table (totals above), new code on the old table (totals above), old code and new code on the rebuilt table (compared
   query by query: identical on all 85; the new-code totals above are therefore also the old-code totals on that table). Not measured: production
   timings, search latency and errors during the refresh on production, the refresh duration on RDS for this change.
+
+**Production result (prod agent, 2026-10-30 18:36 to 18:50 UTC, `notes/ops-handoff`; accepted by Ramon the same day).** api-v3 `f9dde91` to `4e90dc0`;
+`ensure` 3 s, recreate 3 s, `refresh --full` **6.8 minutes** (77,649 rows, 29,820 with other titles, the same as the Mac). "One Big Beautiful Bill":
+HR 1 first; "FEHB Protection Act": HR 1 4th. Single words against the prod agent's 2026-10-28 table: `act` 1,005 to **1,329 ms** (32 percent slower) and its first
+20 results are 16 of 20 the same; `state` 11 of 20 the same (995 to 1,027 ms); `health` 14 of 20 (511 to 505 ms); `school`, `public` and `hemp` unchanged. The
+cause was not examined on the host; the code reason is the one above (other titles are matched by a single word too). Ramon accepted the change.
+
