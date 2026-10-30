@@ -335,28 +335,43 @@ def test_other_titles_are_projected_and_searchable_at_title_weight(world):
     """OPEN-457: `alt_titles` holds the bill's other titles, distinct, sorted, never the main title or an empty one;
     the full-text column gets them at the title weight; the title column itself is unchanged."""
     b = add_bill(world, 1, title="To provide for reconciliation")
-    for title in ("One Big Beautiful Bill Act", "FEHB Protection Act", "One Big Beautiful Bill Act",
-                  "To provide for reconciliation", ""):
+    for title in (
+        "One Big Beautiful Bill Act",
+        "FEHB Protection Act",
+        "One Big Beautiful Bill Act",
+        "To provide for reconciliation",
+        "",
+    ):
         world.add(BillTitle(bill_id=b.id, title=title, note=""))
     world.commit()
     refresh()
     with engine.connect() as c:
-        title, alt, fts = c.execute(text("SELECT title, alt_titles, fts::text FROM ddp_bill_search")).one()
+        title, alt, fts = c.execute(
+            text("SELECT title, alt_titles, fts::text FROM ddp_bill_search")
+        ).one()
     assert title == "To provide for reconciliation"
     assert alt == "FEHB Protection Act\nOne Big Beautiful Bill Act"
     assert "'beauti':" in fts and "A" in fts.split("'beauti':")[1].split(" ")[0]
     assert search_ids("fehb protection") == [b.id]
 
 
-def test_a_table_built_before_alt_titles_converges_and_a_change_of_other_titles_follows_the_bill(world):
+def test_a_table_built_before_alt_titles_converges_and_a_change_of_other_titles_follows_the_bill(
+    world,
+):
     b = add_bill(world, 1, title="Plain title")
     refresh()
     with engine.begin() as c:
-        c.execute(text("ALTER TABLE ddp_bill_search DROP COLUMN alt_titles"))  # drops its index too
+        c.execute(
+            text("ALTER TABLE ddp_bill_search DROP COLUMN alt_titles")
+        )  # drops its index too
     with engine.connect() as c:
-        sp.ensure_schema(c)  # adds the column and the index back; raises if either is missing
+        sp.ensure_schema(
+            c
+        )  # adds the column and the index back; raises if either is missing
     world.add(BillTitle(bill_id=b.id, title="A Nickname Act", note=""))
-    world.query(Bill).filter(Bill.id == b.id).update({"updated_at": _utc(days=1)})  # the importer saves the bill
+    world.query(Bill).filter(Bill.id == b.id).update(
+        {"updated_at": _utc(days=1)}
+    )  # the importer saves the bill
     world.commit()
     refresh()
     with engine.connect() as c:
