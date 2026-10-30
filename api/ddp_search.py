@@ -74,21 +74,50 @@ EXACT_SQL = text(
 """
 )
 
-FTS_SQL = text(
-    f"""
+# OPEN-457: a bill whose title, or one of its other titles, contains the whole typed phrase ranks ahead of bills
+# that only share some of its words, and among those the one whose SHORTEST such title is shortest comes first
+# (the phrase is most of that title: "One Big Beautiful Bill Act" for HR 1, against 115 or more characters for
+# the thirteen bills that merely mention it; measured on the dev copy). "Holds the phrase" means the typed words,
+# in order, as whole words (`:like`, see `_like`); it is NULL when the query is one word or a bill number ("tax"
+# stays ranked by text relevance alone), and a half-typed last word ("daylight sav") holds nothing. NULL here =
+# no title holds the phrase. The tie-break after it is the usual one.
+_PHRASE_LEN = (
+    "(SELECT min(char_length(t)) "
+    "FROM unnest(string_to_array(s.title || E'\\n' || s.alt_titles, E'\\n')) AS t "
+    "WHERE CAST(:like AS text) IS NOT NULL AND t ~* CAST(:like AS text))"
+)
+
+def _fts_sql(phrase: bool):
+    """Full-text leg. With a phrase (two or more words) a bill holding it in a title ranks first; without one the
+    query is exactly what it was before OPEN-457 (no per-row title scan: a common word has 60,000 candidates)."""
+    order = f"{_PHRASE_LEN} NULLS LAST, " if phrase else ""
+    return text(
+        f"""
     WITH hits AS (
         SELECT {_BILL_COLUMNS}, ts_rank_cd(s.fts, query)::float AS score
         FROM ddp_bill_search s, websearch_to_tsquery('english', :q) query
         WHERE s.fts @@ query AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
-        ORDER BY score DESC, s.latest_action_date DESC NULLS LAST
+        ORDER BY {order}score DESC, s.latest_action_date DESC NULLS LAST
         LIMIT :limit
     )
     SELECT hits.*, ab.snippet FROM hits {_SNIPPET_LATERAL}
 """
-)
+    )
 
-FUZZY_TITLE_SQL = text(
-    f"""
+
+# OPEN-457: with a phrase, a bill's OTHER titles are CANDIDATES for the fuzzy tier when they contain the typed phrase
+# as whole words (case-insensitive, `:like` is a word-bounded regex the trigram index answers: "daylight sav" typed
+# half-way matches no alternate title, so as-you-type and misspelt queries rank exactly as before), and a candidate is then scored with
+# word_similarity like a main title, so the two kinds sit on one scale ("school lun" must not score a perfect 1.0
+# against an alternate title and push the bills titled "School Lunch ..." down: seen in the judged set). Running
+# word_similarity as the candidate test itself made this leg 2 to 4 times slower on the 75,805-bill dev copy
+# ("FEHB Protection Act" 104 ms to 430 ms); the regex test adds 10 to 30 ms. A single word has no phrase and
+# runs the query that was here before, unchanged: the full-text leg finds it (`alt_titles` is in `fts` at the
+# title weight).
+def _fuzzy_title_sql(phrase: bool):
+    if not phrase:
+        return text(
+            f"""
     WITH hits AS (
         SELECT {_BILL_COLUMNS}, word_similarity(:q, s.title)::float AS score
         FROM ddp_bill_search s
@@ -98,7 +127,28 @@ FUZZY_TITLE_SQL = text(
     )
     SELECT hits.*, ab.snippet FROM hits {_SNIPPET_LATERAL}
 """
-)
+        )
+    return text(
+        f"""
+    WITH hits AS (
+        SELECT {_BILL_COLUMNS},
+               greatest(word_similarity(:q, s.title),
+                        CASE WHEN s.alt_titles ~* :like THEN word_similarity(:q, s.alt_titles) ELSE 0.0 END
+               )::float AS score,
+               {_PHRASE_LEN} AS phrase_len
+        FROM ddp_bill_search s
+        WHERE (:q <% s.title OR s.alt_titles ~* :like)
+          AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
+        ORDER BY score DESC, phrase_len NULLS LAST, s.latest_action_date DESC NULLS LAST
+        LIMIT :limit
+    )
+    SELECT hits.*, ab.snippet FROM hits {_SNIPPET_LATERAL}
+"""
+    )
+
+
+FTS_SQL, FTS_PHRASE_SQL = _fts_sql(False), _fts_sql(True)
+FUZZY_TITLE_SQL, FUZZY_TITLE_PHRASE_SQL = _fuzzy_title_sql(False), _fuzzy_title_sql(True)
 
 HYDRATE_BILLS_SQL = text(
     f"""
@@ -353,12 +403,22 @@ def _people_hits(db: Session, params: dict) -> List[dict]:
 
 def _rank(hit: dict):
     # Highest score first; on a tie a person outranks a bill (a short typed prefix like "smi" is
-    # far more often a name than a title). Deterministic so the judged set can pin behaviour.
+    # far more often a name than a title), then a bill whose title holds the whole typed phrase, the shortest
+    # such title first (OPEN-457; `_phrase_len` is set on fuzzy bill hits only and removed before the answer
+    # leaves). Deterministic so the judged set can pin behaviour.
+    phrase_len = hit.get("_phrase_len")
     return (
         -hit["score"],
         0 if hit["entity_type"] == "person" else 1,
+        (phrase_len is None, phrase_len or 0),
         hit.get("name") or hit["title"],
     )
+
+
+def _fuzzy_bill_hit(row) -> dict:
+    hit = _bill_hit(row)
+    hit["_phrase_len"] = getattr(row, "phrase_len", None)
+    return hit
 
 
 def _validated_types(types: List[str]) -> set:
@@ -425,6 +485,31 @@ def _is_missing_bill_number(q: str, found_by_number: list) -> bool:
     return bool(_bill_number_like.fullmatch(re.sub(r"[\s.-]", "", q).upper()))
 
 
+def _phrase(q: str) -> Optional[str]:
+    """The query as a phrase for the whole-phrase title rank (OPEN-457): lower-cased with its spaces collapsed,
+    or None for a single word or a bill number."""
+    words = q.lower().split()
+    if len(words) < 2 or (_likely_bill_id.fullmatch(q) and any(ch.isdigit() for ch in q)):
+        return None  # a bill number ("H.R. 1") is the exact tier's, not a phrase ("tax on" is a phrase)
+    return " ".join(words)
+
+
+def _like(q: str) -> Optional[str]:
+    """`_phrase` as a word-bounded, case-insensitive regex for a bill's other titles (OPEN-457): the typed words in
+    order, separated by spaces or tabs only (never the newline that separates one title from the next in
+    `alt_titles`: a phrase must sit inside ONE title), each regex character in them literal. None for a single
+    word or a bill number (the query without an alternate-title branch is used)."""
+    phrase = _phrase(q)
+    if phrase is None:
+        return None
+    words = [re.sub(r"([.^$*+?()\[\]{}|\\])", r"\\\1", w) for w in phrase.split()]
+    return r"\m" + r"[ \t]+".join(words) + r"\M"
+
+
+def _fuzzy_title(params: dict):
+    return FUZZY_TITLE_PHRASE_SQL if params["like"] else FUZZY_TITLE_SQL
+
+
 def _use_similarity_threshold(db: Session) -> None:
     # is_local=true: applies to this transaction only, never leaks to the pooled connection.
     db.execute(
@@ -455,20 +540,22 @@ def search(
     q = _validated_query(q, 1, MAX_QUERY_CHARS)
     jids = _jurisdiction_ids(jurisdiction)
     wanted = _validated_types(types)
-    params = {"q": q, "jids": jids, "limit": limit, "session": session}
+    params = {"q": q, "jids": jids, "limit": limit, "session": session, "like": _like(q)}
     _use_similarity_threshold(db)
 
     exact, text_hits, names = [], [], []
     if "bill" in wanted:
         if _likely_bill_id.fullmatch(q):
             exact = [_bill_hit(r) for r in db.execute(EXACT_SQL, params)]
-        text_hits = [_bill_hit(r) for r in db.execute(FTS_SQL, params)]
+        text_hits = [_bill_hit(r) for r in db.execute(FTS_PHRASE_SQL if params["like"] else FTS_SQL, params)]
     if len(q) >= 3:  # trigram matching is meaningless below three characters
         if "bill" in wanted and not _is_missing_bill_number(q, exact):
-            names += [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
+            names += [_fuzzy_bill_hit(r) for r in db.execute(_fuzzy_title(params), params)]
         if "person" in wanted:
             names += _people_hits(db, params)
         names.sort(key=_rank)
+        for hit in names:
+            hit.pop("_phrase_len", None)
     return {
         "q": q,
         "exact": exact,
@@ -491,7 +578,7 @@ def suggest(
     started = time.monotonic()
     q = _validated_query(q, 2, 100)
     jids = _jurisdiction_ids(jurisdiction)
-    params = {"q": q, "jids": jids, "limit": limit, "session": None}
+    params = {"q": q, "jids": jids, "limit": limit, "session": None, "like": _like(q)}
     _use_similarity_threshold(db)
 
     results: List[dict] = []
@@ -500,9 +587,11 @@ def suggest(
     if len(q) >= 3:
         fuzzy = []
         if not _is_missing_bill_number(q, results):
-            fuzzy += [_bill_hit(r) for r in db.execute(FUZZY_TITLE_SQL, params)]
+            fuzzy += [_fuzzy_bill_hit(r) for r in db.execute(_fuzzy_title(params), params)]
         fuzzy += _people_hits(db, params)
         fuzzy.sort(key=_rank)
+        for hit in fuzzy:
+            hit.pop("_phrase_len", None)
         seen = {h["id"] for h in results}
         results += [h for h in fuzzy if h["id"] not in seen]
     return {

@@ -11,8 +11,8 @@ PRIMITIVES.md, "Why not a database table"), and api-v3 already owns DDP-only sid
 same route (start-os-api.sh's bulk_dataexport ensure step).
 
 Freshness invariant (PLAN-enterprise-search.md 4.5.3): a row is stale when its bill's or any of its
-archived documents' `updated_at` is newer than the row's `source_updated_at`. Abstracts, subjects and
-the originating chamber are only ever changed by openstates-core's importer, which also saves the
+archived documents' `updated_at` is newer than the row's `source_updated_at`. Abstracts, other titles,
+subjects and the originating chamber are only ever changed by openstates-core's importer, which also saves the
 bill (advancing `Bill.updated_at`); any other writer must touch `opencivicdata_bill.updated_at`, or be
 followed by `python -m api.search_projection refresh --full --jurisdiction <x>`.
 """
@@ -60,6 +60,7 @@ EXPECTED_COLUMNS = {
     "identifier",
     "identifier_norm",
     "title",
+    "alt_titles",
     "chamber",
     "latest_action_date",
     "latest_action_description",
@@ -71,6 +72,7 @@ EXPECTED_COLUMNS = {
 EXPECTED_INDEXES = {
     "ddp_bill_search_fts_idx",
     "ddp_bill_search_title_idx",
+    "ddp_bill_search_alt_titles_idx",
     "ddp_bill_search_ident_idx",
     "ddp_bill_search_juris_idx",
 }
@@ -85,6 +87,7 @@ DDL_STATEMENTS = [
         identifier          varchar     NOT NULL,
         identifier_norm     varchar     NOT NULL,
         title               text        NOT NULL,
+        alt_titles          text        NOT NULL DEFAULT '',
         chamber             varchar,
         latest_action_date  varchar,
         latest_action_description text,
@@ -93,8 +96,13 @@ DDL_STATEMENTS = [
         refreshed_at        timestamptz NOT NULL DEFAULT now()
     )
     """,
+    # OPEN-457: the bill's other titles (opencivicdata_billtitle), newline-separated, so a search for a title the
+    # authors gave the bill ("One Big Beautiful Bill Act") finds it. Older tables converge here; a row built
+    # before this column existed reads '' until the projection is rebuilt (`refresh --full`).
+    "ALTER TABLE ddp_bill_search ADD COLUMN IF NOT EXISTS alt_titles text NOT NULL DEFAULT ''",
     "CREATE INDEX IF NOT EXISTS ddp_bill_search_fts_idx   ON ddp_bill_search USING gin (fts)",
     "CREATE INDEX IF NOT EXISTS ddp_bill_search_title_idx ON ddp_bill_search USING gin (title gin_trgm_ops)",
+    "CREATE INDEX IF NOT EXISTS ddp_bill_search_alt_titles_idx ON ddp_bill_search USING gin (alt_titles gin_trgm_ops)",
     "CREATE INDEX IF NOT EXISTS ddp_bill_search_ident_idx ON ddp_bill_search (identifier_norm varchar_pattern_ops)",
     "CREATE INDEX IF NOT EXISTS ddp_bill_search_juris_idx ON ddp_bill_search (jurisdiction_id)",
 ]
@@ -131,13 +139,14 @@ DOCS_SQL = text(
 UPSERT_SQL = text(
     """
     INSERT INTO ddp_bill_search AS t
-        (bill_id, jurisdiction_id, session_identifier, identifier, identifier_norm, title,
+        (bill_id, jurisdiction_id, session_identifier, identifier, identifier_norm, title, alt_titles,
          chamber, latest_action_date, latest_action_description, fts, source_updated_at, refreshed_at)
     SELECT b.id, sess.jurisdiction_id, sess.identifier, b.identifier,
            upper(regexp_replace(b.identifier, '[\\s-]', '', 'g')),
            coalesce(b.title, ''),
+           alt.titles,
            org.classification, b.latest_action_date, b.latest_action_description,
-           setweight(to_tsvector('english', coalesce(b.title, '')), 'A')
+           setweight(to_tsvector('english', coalesce(b.title, '') || ' ' || alt.titles), 'A')
              || setweight(to_tsvector('english',
                     coalesce((SELECT string_agg(a.abstract, ' ') FROM opencivicdata_billabstract a
                               WHERE a.bill_id = b.id), '')
@@ -153,11 +162,16 @@ UPSERT_SQL = text(
     JOIN opencivicdata_bill b ON b.id = p.bill_id
     JOIN opencivicdata_legislativesession sess ON sess.id = b.legislative_session_id
     LEFT JOIN opencivicdata_organization org ON org.id = b.from_organization_id
+    LEFT JOIN LATERAL (
+        SELECT coalesce(string_agg(x.title, E'\\n' ORDER BY x.title), '') AS titles
+        FROM (SELECT DISTINCT t.title FROM opencivicdata_billtitle t
+              WHERE t.bill_id = b.id AND coalesce(t.title, '') <> '' AND t.title <> coalesce(b.title, '')) x
+    ) alt ON true
     ON CONFLICT (bill_id) DO UPDATE SET
         jurisdiction_id = EXCLUDED.jurisdiction_id,
         session_identifier = EXCLUDED.session_identifier,
         identifier = EXCLUDED.identifier, identifier_norm = EXCLUDED.identifier_norm,
-        title = EXCLUDED.title, chamber = EXCLUDED.chamber,
+        title = EXCLUDED.title, alt_titles = EXCLUDED.alt_titles, chamber = EXCLUDED.chamber,
         latest_action_date = EXCLUDED.latest_action_date,
         latest_action_description = EXCLUDED.latest_action_description, fts = EXCLUDED.fts,
         source_updated_at = EXCLUDED.source_updated_at,
