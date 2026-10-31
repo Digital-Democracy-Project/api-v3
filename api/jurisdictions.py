@@ -6,6 +6,7 @@ from .schemas import Jurisdiction, JurisdictionClassification
 from .pagination import Pagination
 from .auth import apikey_auth
 from .utils import jurisdiction_filter
+from .current_session import session_flags
 
 
 class JurisdictionInclude(str, Enum):
@@ -33,6 +34,11 @@ class JurisdictionPagination(Pagination):
         # limit makes a subquery approach not work
         if JurisdictionInclude.latest_runs in includes:
             obj.latest_runs = data.get_latest_runs()
+        # one rule for "current" / "previous", published here and nowhere else (OPEN-467)
+        if JurisdictionInclude.legislative_sessions in includes:
+            flags = session_flags(obj.legislative_sessions)
+            for session in obj.legislative_sessions:
+                session.is_current, session.is_previous = flags[session.identifier]
 
     def __init__(self, page: int = 1, per_page: int = 52):
         self.page = page

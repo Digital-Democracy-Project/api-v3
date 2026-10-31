@@ -99,6 +99,9 @@ def test_jurisdiction_include_sessions(client):
         "classification": "",
         "start_date": "2020-01-01",
         "end_date": "2020-12-31",
+        # OPEN-467: the 2021 session (no end date) is current, so 2020 is the previous one
+        "is_current": False,
+        "is_previous": True,
         "downloads": [
             {
                 "created_at": "2021-01-01T00:00:00",

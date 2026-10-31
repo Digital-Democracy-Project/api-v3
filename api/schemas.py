@@ -67,6 +67,9 @@ class LegislativeSession(BaseModel):
     start_date: str
     end_date: str
     downloads: Optional[List[DataExport]]
+    # OPEN-467: set from api/current_session.py when sessions are included on a jurisdiction
+    is_current: Optional[bool]
+    is_previous: Optional[bool]
 
     class Config:
         orm_mode = True
