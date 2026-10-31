@@ -368,7 +368,11 @@ async def bills_search(
     elif sort == BillSortOption.latest_action_asc:
         query = query.order_by(nullslast(models.Bill.latest_action_date))
     elif sort == BillSortOption.latest_action_desc:
-        query = query.order_by(nullslast(desc(models.Bill.latest_action_date)))
+        # OPEN-469: newest action first, bills with no action date last. Bill.id breaks ties so many
+        # bills sharing a day come back in a fixed order, and paging an unchanged list is stable.
+        query = query.order_by(
+            nullslast(desc(models.Bill.latest_action_date)), models.Bill.id
+        )
     else:
         raise HTTPException(500, "Unknown sort option, this shouldn't happen!")
 
@@ -467,7 +471,9 @@ async def bills_search(
                 )
             )
 
-    if not q and not jurisdiction:
+    # OPEN-469: the all-jurisdictions browse is allowed only when newest-action order is asked for
+    # (the default order still needs a jurisdiction or q, as before)
+    if not q and not jurisdiction and sort != BillSortOption.latest_action_desc:
         raise HTTPException(400, "either 'jurisdiction' or 'q' required")
 
     # handle includes
