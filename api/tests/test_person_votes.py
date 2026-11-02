@@ -16,7 +16,9 @@ from ..db.models import (
     VoteEvent,
 )
 
-ADAMS = "ocd-person/00000481-0000-0000-0000-00000000000a"  # many votes, two jurisdictions
+ADAMS = (
+    "ocd-person/00000481-0000-0000-0000-00000000000a"  # many votes, two jurisdictions
+)
 BERRI = "ocd-person/00000481-0000-0000-0000-00000000000b"  # votes on the same events
 NOBODY = "ocd-person/00000481-0000-0000-0000-00000000000c"  # exists, has no votes
 UNKNOWN = "ocd-person/00000481-0000-0000-0000-0000000000ff"  # not in the database
@@ -53,22 +55,32 @@ def person_vote_data():
             jur = db.execute(
                 select(Jurisdiction).where(Jurisdiction.name.ilike(abbr))
             ).scalar_one()
-            sessions[abbr] = db.execute(
-                select(LegislativeSession).where(
-                    LegislativeSession.jurisdiction_id == jur.id
+            sessions[abbr] = (
+                db.execute(
+                    select(LegislativeSession).where(
+                        LegislativeSession.jurisdiction_id == jur.id
+                    )
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
         orgs = {
             name: db.execute(
                 select(Organization).where(
                     Organization.jurisdiction_id == sess.jurisdiction_id,
                     Organization.classification.in_(["lower", "legislature"]),
                 )
-            ).scalars().first()
+            )
+            .scalars()
+            .first()
             for name, sess in sessions.items()
         }
 
-        for pid, name in ((ADAMS, "Jay Adams"), (BERRI, "Bea Berri"), (NOBODY, "Nel Nobody")):
+        for pid, name in (
+            (ADAMS, "Jay Adams"),
+            (BERRI, "Bea Berri"),
+            (NOBODY, "Nel Nobody"),
+        ):
             add(Person(id=pid, name=name, party="Independent", extras={}))
 
         def bill(key):
@@ -118,10 +130,22 @@ def person_vote_data():
                     )
                 )
 
-        event("a", "2026-03-01", "ohio", oh_bill, [(ADAMS, "yes", "Adams"), (BERRI, "no", "Berri")])
+        event(
+            "a",
+            "2026-03-01",
+            "ohio",
+            oh_bill,
+            [(ADAMS, "yes", "Adams"), (BERRI, "no", "Berri")],
+        )
         event("b", "2026-03-01", "ohio", oh_bill, [(ADAMS, "no", "Adams")])
         event("c", "2026-03-01", "ohio", oh_bill, [(ADAMS, "yes", "Adams")])
-        event("nobill", "2026-04-01", "ohio", None, [(ADAMS, "absent", "Adams"), (BERRI, "yes", "Berri")])
+        event(
+            "nobill",
+            "2026-04-01",
+            "ohio",
+            None,
+            [(ADAMS, "absent", "Adams"), (BERRI, "yes", "Berri")],
+        )
         event("ne", "2025-01-01", "nebraska", ne_bill, [(ADAMS, "abstain", "Adams")])
         # a name nobody matched to a legislator: never returned for anyone
         event("unmatched", "2026-05-01", "ohio", oh_bill, [(None, "yes", "Adams")])
