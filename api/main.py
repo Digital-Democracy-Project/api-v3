@@ -15,6 +15,7 @@ from . import (
     ddp_search,
     ddp_embedding,
     ddp_enrollment,
+    person_votes,
 )
 
 if "SENTRY_URL" in os.environ:
@@ -23,6 +24,7 @@ if "SENTRY_URL" in os.environ:
 app = FastAPI()
 app.include_router(jurisdictions.router)
 app.include_router(people.router)
+app.include_router(person_votes.router)
 app.include_router(bills.router)
 app.include_router(committees.router)
 app.include_router(events.router)
