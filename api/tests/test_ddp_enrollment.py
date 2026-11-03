@@ -79,13 +79,20 @@ def test_a_file_replaced_by_rename_the_way_git_pull_does_is_picked_up(client, ma
     first = client.get(URL).json()
     assert first["jurisdictions"]["nc"]["status"] == "probing"
     replacement = manifest.with_name("jurisdictions.yaml.new")
-    replacement.write_text(yaml.safe_dump({"nc": _entry("live"), "pa": _entry("scraping")}))
+    replacement.write_text(
+        yaml.safe_dump({"nc": _entry("live"), "pa": _entry("scraping")})
+    )
     os.utime(replacement, (time.time() + 7, time.time() + 7))
     inode_before = manifest.stat().st_ino
     os.replace(replacement, manifest)
-    assert manifest.stat().st_ino != inode_before  # a real replace, not an edit in place
+    assert (
+        manifest.stat().st_ino != inode_before
+    )  # a real replace, not an edit in place
     second = client.get(URL).json()
-    assert second["jurisdictions"]["nc"]["status"] == "live" and "pa" in second["jurisdictions"]
+    assert (
+        second["jurisdictions"]["nc"]["status"] == "live"
+        and "pa" in second["jurisdictions"]
+    )
     assert second["manifest_mtime"] != first["manifest_mtime"]
 
 
@@ -98,8 +105,12 @@ def test_the_loader_trusts_the_modification_time_alone(client, manifest):
     assert client.get(URL).json()["jurisdictions"]["nc"]["status"] == "probing"
     manifest.write_text(yaml.safe_dump({"nc": _entry("live")}))
     os.utime(manifest, (pinned, pinned))  # same time, different content
-    assert client.get(URL).json()["jurisdictions"]["nc"]["status"] == "probing"  # still the cached list
-    os.utime(manifest, (pinned + 1, pinned + 1))  # what the sync script's time bump does
+    assert (
+        client.get(URL).json()["jurisdictions"]["nc"]["status"] == "probing"
+    )  # still the cached list
+    os.utime(
+        manifest, (pinned + 1, pinned + 1)
+    )  # what the sync script's time bump does
     assert client.get(URL).json()["jurisdictions"]["nc"]["status"] == "live"
 
 
