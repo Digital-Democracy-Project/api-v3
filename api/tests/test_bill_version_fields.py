@@ -11,7 +11,14 @@ from contextlib import contextmanager
 import pytest
 
 from api.db.models import Bill, BillVersion, BillVersionDocument, BillVersionLink
-from api.version_ordering import STAGE_INTRODUCED, STAGE_UNKNOWN, note_stage
+from api.version_ordering import (
+    STAGE_AMENDMENT,
+    STAGE_ENACTED,
+    STAGE_FINAL_PASSAGE,
+    STAGE_INTRODUCED,
+    STAGE_UNKNOWN,
+    note_stage,
+)
 
 from .conftest import TestingSessionLocal
 
@@ -624,6 +631,49 @@ def test_north_carolina_editions_ratified_and_session_law_are_ordered_and_classi
 )
 def test_north_carolina_stage_rules_stay_exact(note):
     assert note_stage(note)[0] == STAGE_UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("note", "expected_stage"),
+    [
+        # OPEN-482: Pennsylvania, Nebraska and Louisiana version names, copied from
+        # openstates-core (real notes from the production replica, 2026-11-03).
+        ("Printer's No. PN1422", STAGE_AMENDMENT),
+        ("Slip Law", STAGE_ENACTED),
+        ("Final Reading", STAGE_FINAL_PASSAGE),
+        ("von Gillern AM1020", STAGE_AMENDMENT),
+        ("McKinney FA134", STAGE_AMENDMENT),
+        ("HB519 Act 303", STAGE_ENACTED),
+        ("SB40 Act", STAGE_ENACTED),
+    ],
+)
+def test_pennsylvania_nebraska_louisiana_stage_rules(note, expected_stage):
+    assert note_stage(note)[0] == expected_stage
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "Printer's No. PN",
+        "Slip Law Copy",
+        "AM1020",
+        "Senate Floor Bureau Note, #3797, Miller, G., Adopted",
+        "HB519 Acts",
+    ],
+)
+def test_pennsylvania_nebraska_louisiana_stage_rules_stay_exact(note):
+    assert note_stage(note)[0] == STAGE_UNKNOWN
+
+
+def test_nebraska_amendment_ordinal_is_the_last_amendment_number():
+    assert note_stage("von Gillern AM1020") == (STAGE_AMENDMENT, 1020.0)
+    assert note_stage("Spivey AM1738 Spivey FA924") == (STAGE_AMENDMENT, 924.0)
+    assert note_stage("Executive Board AM2028 Conrad AM2266 Conrad AM2267") == (
+        STAGE_AMENDMENT,
+        2267.0,
+    )
+    assert note_stage("Printer's No. PN0130") == (STAGE_AMENDMENT, 130.0)
+    assert note_stage("Final Reading") == (STAGE_FINAL_PASSAGE, 0.5)
 
 
 def test_bill_with_only_unknown_versions_still_gets_unknown_fields(client):
