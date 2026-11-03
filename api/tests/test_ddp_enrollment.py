@@ -73,6 +73,36 @@ def test_a_changed_file_is_picked_up_without_a_restart(client, manifest):
     assert client.get(URL).json()["jurisdictions"]["nc"]["status"] == "live"
 
 
+def test_a_file_replaced_by_rename_the_way_git_pull_does_is_picked_up(client, manifest):
+    """OPEN-483: `git pull` writes a temp file and renames it over the old one (a new inode). Served through a DIRECTORY
+    mount (ddp-open-states deploy/manifest/) that is what api-v3 sees, and the loader must answer with the new list."""
+    first = client.get(URL).json()
+    assert first["jurisdictions"]["nc"]["status"] == "probing"
+    replacement = manifest.with_name("jurisdictions.yaml.new")
+    replacement.write_text(yaml.safe_dump({"nc": _entry("live"), "pa": _entry("scraping")}))
+    os.utime(replacement, (time.time() + 7, time.time() + 7))
+    inode_before = manifest.stat().st_ino
+    os.replace(replacement, manifest)
+    assert manifest.stat().st_ino != inode_before  # a real replace, not an edit in place
+    second = client.get(URL).json()
+    assert second["jurisdictions"]["nc"]["status"] == "live" and "pa" in second["jurisdictions"]
+    assert second["manifest_mtime"] != first["manifest_mtime"]
+
+
+def test_the_loader_trusts_the_modification_time_alone(client, manifest):
+    """The contract deploy/sync-manifest.sh relies on (OPEN-483): changed content with the SAME modification time is not
+    re-read, so the sync script gives a changed copy a new time; a new time is re-read at once."""
+    pinned = time.time() - 3600
+    os.utime(manifest, (pinned, pinned))
+    ddp_enrollment._cache.clear()
+    assert client.get(URL).json()["jurisdictions"]["nc"]["status"] == "probing"
+    manifest.write_text(yaml.safe_dump({"nc": _entry("live")}))
+    os.utime(manifest, (pinned, pinned))  # same time, different content
+    assert client.get(URL).json()["jurisdictions"]["nc"]["status"] == "probing"  # still the cached list
+    os.utime(manifest, (pinned + 1, pinned + 1))  # what the sync script's time bump does
+    assert client.get(URL).json()["jurisdictions"]["nc"]["status"] == "live"
+
+
 def test_a_missing_manifest_is_503_naming_the_reason_not_an_empty_list(
     client, tmp_path, monkeypatch
 ):
