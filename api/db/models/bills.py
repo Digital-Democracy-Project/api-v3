@@ -2,7 +2,7 @@ from functools import lru_cache
 from sqlalchemy import Column, String, ForeignKey, DateTime, Integer, Boolean, Text
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY, TSVECTOR
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import deferred, relationship
 from .. import Base
 from .common import PrimaryUUID, LinkBase, RelatedEntityBase
 from .jurisdiction import LegislativeSession
@@ -217,6 +217,12 @@ class BillVersionDocument(Base):
     raw_text = Column(Text)
     is_error = Column(Boolean)
     diff_from_previous_version = Column(Text)
+    # OPEN-422/OPEN-492: written by openstates-core's archiver: True = a real bill version,
+    # False = a procedural paper (a committee amendment list, a comparison sheet), NULL = not
+    # decided yet. Deferred so a plain query of this table never selects it: the column is added
+    # by a core migration, and the Mac's replica (logical replication carries rows, not schema
+    # changes) may not have it for a while. Read it only through api/bill_version_flag.py.
+    is_bill_version = deferred(Column(Boolean))
     # SYNC-65: mapped so /bills?document_updated_since= can filter on it directly -- this
     # column already exists on the underlying table (Django's own auto_now=True field), just
     # wasn't mapped here since nothing previously needed to query it.
