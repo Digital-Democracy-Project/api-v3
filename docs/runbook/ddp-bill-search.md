@@ -42,6 +42,9 @@ docker exec ddp-openstates-api-1 python -m api.search_projection ensure
 # => === BILL SEARCH ENSURE: ddp_bill_search present ===
 ```
 
+A plain `ensure` never touches the bill table. The newest-action bill-list index is made only by `ensure --bill-list-index`
+(OPEN-484, section 9), on an explicit request.
+
 Idempotent (`CREATE ... IF NOT EXISTS`), about half a second, safe to repeat. It raises if a table with the
 right name exists but lacks a required column or index, which is the signal to add an `ALTER` to
 `DDL_STATEMENTS`. `POST /ddp/search/refresh` also calls it first, so a missed `ensure` self-heals on the
@@ -259,4 +262,39 @@ The judged set (BROKER-162, 85 queries, `python manage.py run_search_eval --base
 HR 1 first; "FEHB Protection Act": HR 1 4th. Single words against the prod agent's 2026-10-28 table: `act` 1,005 to **1,329 ms** (32 percent slower) and its first
 20 results are 16 of 20 the same; `state` 11 of 20 the same (995 to 1,027 ms); `health` 14 of 20 (511 to 505 ms); `school`, `public` and `hemp` unchanged. The
 cause was not examined on the host; the code reason is the one above (other titles are matched by a single word too). Ramon accepted the change.
+
+## 9. OPEN-484: an index for the newest-action bill list (`GET /bills?sort=latest_action_desc`, OPEN-469)
+
+**Why.** The list orders by `latest_action_date DESC NULLS LAST, id`. The table's own index `opencivicdata_bill_latest_action_idx` is
+ascending with no `id`, so Postgres cannot use it for that order: it reads every bill and sorts them for every page. Measured on the
+production-copy database on the Mac (87,489 bills, `EXPLAIN ANALYZE`, three runs): the page query **39 ms, 0.17 ms with the new index**.
+The page's total count (`count(*)` over the same four joined tables, about **43 ms**) is unchanged by it, and the deepest page (about 148 ms)
+is unchanged too (an offset still walks past every row before it). On EC2 the whole call was 613 ms on 2026-10-31 (prod agent), about six
+times the Mac; production has not been timed with this index.
+
+**What changed.** `python -m api.search_projection ensure --bill-list-index` creates `opencivicdata_bill_latest_action_desc_idx ON
+opencivicdata_bill (latest_action_date DESC NULLS LAST, id)` if it is missing (7.8 MB; it checks first, so a second run takes no lock) and
+prints `=== BILL LIST ENSURE: opencivicdata_bill_latest_action_desc_idx created ===` (or `already present`). A **plain `ensure` does not
+create it** (other deploys run a plain `ensure`), and neither does `ensure_schema`, which runs before every refresh: even `CREATE INDEX IF NOT
+EXISTS` takes a lock on the bill table before it notices the index exists. No code in the endpoint changed, so an instance that never ran
+the flag returns the same answers, only at the old speed.
+
+**Order of steps (do not skip the first two).**
+1. **Baseline, read-only, by the prod agent:** time `GET /bills?sort=latest_action_desc&per_page=20` (page 1, a middle page, `jurisdiction=us`)
+   directly against api-v3 on the host that serves production, and `EXPLAIN (ANALYZE, BUFFERS)` the page query and its count (the exact SQL is
+   in the OPEN-484 request note). Also read which role owns the bill table and which role the API connects as:
+   `SELECT pg_get_userbyid(relowner), current_user FROM pg_class WHERE relname = 'opencivicdata_bill';` (run through the API's own connection).
+   If they differ, stop: the index cannot be made by `ensure`.
+2. **Ramon's go** for creating an index on the production bill table.
+3. At a quiet moment, with no scrape importing: `ensure --bill-list-index` from the new image (same form as section 3). The build is not
+   `CONCURRENTLY`: it blocks writes to `opencivicdata_bill` **for the whole build** (about 0.1 second on the Mac, measured twice on the
+   87,489-bill copy; production is about six times slower per query, so expect well under a second, **not measured**: record the real time of
+   the command in the report, and Ramon's go in step 2 is for that window). Before the build it waits for writers already on the table
+   for at most **5 seconds** (`lock_timeout`; it bounds that wait only, not the build): if one is still writing it stops with
+   `canceling statement due to lock timeout`, creates nothing, and is simply run again later.
+4. Check, no restart or refresh needed (the endpoint uses the index at once): `SELECT indexdef FROM pg_indexes WHERE indexname =
+   'opencivicdata_bill_latest_action_desc_idx';` shows `(latest_action_date DESC NULLS LAST, id)`; repeat step 1's timings and compare the
+   first 20 bills of page 1 with the baseline (same bills, same order).
+
+**Rollback.** `DROP INDEX opencivicdata_bill_latest_action_desc_idx;` Nothing else depends on it.
 

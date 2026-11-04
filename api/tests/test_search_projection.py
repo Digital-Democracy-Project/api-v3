@@ -7,6 +7,7 @@ import datetime as dt
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from api import search_projection as sp
 from api.db.models import (
@@ -187,6 +188,78 @@ def test_ensure_schema_is_idempotent_and_creates_indexes(world):
             )
         }
     assert sp.EXPECTED_INDEXES <= idx
+
+
+def test_bill_list_order_index_is_made_once_by_its_own_call_and_never_by_ensure_schema(
+    world,
+):
+    # OPEN-484: the newest-action index on the bill table. ensure_schema runs before every refresh, so it must
+    # not make (or lock the bill table for) this index; the operator's `ensure` makes it, once.
+    def index_def(c):
+        return c.execute(
+            text(
+                "SELECT indexdef FROM pg_indexes "
+                "WHERE tablename='opencivicdata_bill' AND indexname=:n"
+            ),
+            {"n": sp.BILL_LIST_ORDER_INDEX},
+        ).scalar()
+
+    with engine.connect() as c:
+        with c.begin():
+            c.execute(text(f"DROP INDEX IF EXISTS {sp.BILL_LIST_ORDER_INDEX}"))
+        sp.ensure_schema(c)
+        assert index_def(c) is None  # the refresh path does not create it
+        assert sp.ensure_bill_list_order_index(c) is True
+        assert "(latest_action_date DESC NULLS LAST, id)" in index_def(c)
+        assert sp.ensure_bill_list_order_index(c) is False  # present: nothing run
+
+
+def test_cli_ensure_makes_the_bill_list_index_only_when_asked(
+    world, monkeypatch, capsys
+):
+    import api.db
+
+    monkeypatch.setattr(api.db, "engine", engine)
+    drop = f"DROP INDEX IF EXISTS {sp.BILL_LIST_ORDER_INDEX}"
+    exists = (
+        "SELECT count(*) FROM pg_indexes WHERE tablename='opencivicdata_bill' "
+        f"AND indexname='{sp.BILL_LIST_ORDER_INDEX}'"
+    )
+    with engine.begin() as c:
+        c.execute(text(drop))
+    assert sp._cli(["ensure"]) == 0  # other deploys run a plain `ensure`
+    assert "BILL LIST ENSURE" not in capsys.readouterr().out
+    with engine.connect() as c:
+        assert c.execute(text(exists)).scalar() == 0
+    assert sp._cli(["ensure", "--bill-list-index"]) == 0
+    assert f"{sp.BILL_LIST_ORDER_INDEX} created" in capsys.readouterr().out
+    assert sp._cli(["ensure", "--bill-list-index"]) == 0
+    assert f"{sp.BILL_LIST_ORDER_INDEX} already present" in capsys.readouterr().out
+    with pytest.raises(SystemExit):  # not silently ignored on another command
+        sp._cli(["refresh", "--bill-list-index", "--dry-run"])
+
+
+def test_bill_list_index_gives_up_instead_of_queueing_behind_a_writer(world):
+    # a writer holding the bill table: the CREATE INDEX must time out (and leave nothing behind), not wait,
+    # while every later writer queues behind it
+    exists = (
+        "SELECT count(*) FROM pg_indexes WHERE tablename='opencivicdata_bill' "
+        f"AND indexname='{sp.BILL_LIST_ORDER_INDEX}'"
+    )
+    with engine.begin() as c:
+        c.execute(text(f"DROP INDEX IF EXISTS {sp.BILL_LIST_ORDER_INDEX}"))
+    with engine.connect() as writer:
+        with writer.begin():
+            writer.execute(text("LOCK TABLE opencivicdata_bill IN ROW EXCLUSIVE MODE"))
+            with engine.connect() as c:
+                # the statement timeout only keeps a broken lock timeout from hanging the test: its message differs
+                c.execute(text("SET statement_timeout = 3000"))
+                with pytest.raises(OperationalError, match="lock timeout"):
+                    sp.ensure_bill_list_order_index(c, lock_timeout_ms=200)
+    with engine.connect() as c:
+        assert c.execute(text(exists)).scalar() == 0
+        # the writer is gone: it now goes through
+        assert sp.ensure_bill_list_order_index(c) is True
 
 
 def test_ensure_schema_rejects_missing_column_then_passes_once_restored(world):

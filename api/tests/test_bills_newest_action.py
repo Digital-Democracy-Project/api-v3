@@ -2,8 +2,9 @@
 import datetime
 import uuid
 
-from sqlalchemy import event, select
+from sqlalchemy import event, select, text
 
+from .. import search_projection as sp
 from .conftest import TestingSessionLocal, engine
 from ..db.models import Bill, LegislativeSession
 
@@ -122,6 +123,41 @@ def test_newest_action_order_is_the_date_nulls_last_then_the_bill_id(client):
         "opencivicdata_bill.id LIMIT"
     )
     assert any(wanted in statement for statement in sent), sent
+
+
+def test_the_ensure_index_serves_the_endpoints_own_page_query(client):
+    # OPEN-484: the index only helps if it matches the order the endpoint really asks for, so take the
+    # page query the endpoint sent and ask Postgres how it would run it with sequential scans switched off:
+    # it must walk the new index and need no sort.
+    with engine.connect() as c:
+        sp.ensure_bill_list_order_index(c)
+    sent = []
+
+    def grab(conn, cursor, statement, parameters, context, executemany):
+        sent.append((statement, parameters))
+
+    event.listen(engine, "after_cursor_execute", grab)
+    try:
+        assert (
+            client.get("/bills?sort=latest_action_desc&per_page=20").status_code == 200
+        )
+    finally:
+        event.remove(engine, "after_cursor_execute", grab)
+    page = [
+        (s, p)
+        for s, p in sent
+        if "ORDER BY opencivicdata_bill.latest_action_date DESC NULLS LAST" in s
+        and "LIMIT" in s
+    ]
+    assert page, [s for s, _ in sent]
+    statement, parameters = page[0]
+    with engine.connect() as c, c.begin():
+        c.execute(text("SET LOCAL enable_seqscan = off"))
+        plan = "\n".join(
+            r[0] for r in c.exec_driver_sql("EXPLAIN " + statement, parameters)
+        )
+    assert sp.BILL_LIST_ORDER_INDEX in plan, plan
+    assert "Sort" not in plan, plan
 
 
 def test_default_order_still_needs_a_jurisdiction_or_a_query(client):
