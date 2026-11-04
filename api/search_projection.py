@@ -107,6 +107,47 @@ DDL_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS ddp_bill_search_juris_idx ON ddp_bill_search (jurisdiction_id)",
 ]
 
+# OPEN-484: GET /bills?sort=latest_action_desc (bills.py, OPEN-469) orders by "latest_action_date DESC NULLS LAST,
+# id". The table's own index, opencivicdata_bill_latest_action_idx, is ascending with no id, so Postgres cannot use it
+# for that order and reads and sorts every bill for each page (about 39 ms of the page query on the 87,489-bill dev
+# copy; 0.17 ms with this index). This index matches the order.
+# It is deliberately NOT in DDL_STATEMENTS: ensure_schema runs before every refresh, and even CREATE INDEX IF NOT
+# EXISTS takes a lock on the bill table before it notices the index is there. It is made only by
+# `ensure --bill-list-index`, an explicit request, never by a plain `ensure` (other deploys run that); an instance that
+# never ran it keeps the old, slower plan and the same answers.
+BILL_LIST_ORDER_INDEX = "opencivicdata_bill_latest_action_desc_idx"
+BILL_LIST_ORDER_INDEX_SQL = (
+    f"CREATE INDEX {BILL_LIST_ORDER_INDEX} "
+    "ON opencivicdata_bill (latest_action_date DESC NULLS LAST, id)"
+)
+# CREATE INDEX (not CONCURRENTLY) first waits for writers already on the bill table, and every writer that arrives
+# meanwhile queues behind it. This timeout bounds only that WAIT: give up after this long rather than hold them, and the
+# operator reruns it when no import is writing. It does not bound the build itself, which blocks writes to the bill
+# table for as long as it takes (about 0.1 s on the 87,489-bill Mac copy; the prod agent records the real time).
+BILL_LIST_ORDER_INDEX_LOCK_TIMEOUT_MS = 5000
+
+
+def ensure_bill_list_order_index(
+    conn: Connection, lock_timeout_ms: int = BILL_LIST_ORDER_INDEX_LOCK_TIMEOUT_MS
+) -> bool:
+    """Create the newest-action index on opencivicdata_bill if it is missing. True when it was created by this call.
+    The check comes first, so a second run takes no lock on the bill table. Raises (nothing created) when the table
+    lock is not granted within lock_timeout_ms."""
+    with conn.begin():
+        present = conn.execute(
+            text(
+                "SELECT 1 FROM pg_indexes "
+                "WHERE tablename = 'opencivicdata_bill' AND schemaname = current_schema() AND indexname = :name"
+            ),
+            {"name": BILL_LIST_ORDER_INDEX},
+        ).scalar()
+        if present:
+            return False
+        conn.execute(text(f"SET LOCAL lock_timeout = {int(lock_timeout_ms)}"))
+        conn.execute(text(BILL_LIST_ORDER_INDEX_SQL))
+    return True
+
+
 # A bill needs (re)building when it has no row, or its own row or any archived document is newer
 # than the newest input the projection last saw (source_updated_at).
 _STALE_FROM_WHERE = """
@@ -447,7 +488,7 @@ def stale_count(conn: Connection, jurisdiction_id: Optional[str] = None) -> int:
 
 
 def _cli(argv=None) -> int:
-    """python -m api.search_projection ensure|refresh [--jurisdiction fl] [--full] [--dry-run]
+    """python -m api.search_projection ensure|refresh [--jurisdiction fl] [--full] [--dry-run] [--bill-list-index]
 
     Operator entry point (Mac boot script, RDS host runbook, manual repair). The scheduled path
     is POST /ddp/search/refresh, driven by ddp-sync."""
@@ -461,12 +502,19 @@ def _cli(argv=None) -> int:
     ap.add_argument("command", choices=["ensure", "refresh"])
     ap.add_argument("--jurisdiction")
     ap.add_argument(
+        "--bill-list-index",
+        action="store_true",
+        help="with `ensure`: also create the newest-action index on opencivicdata_bill (OPEN-484)",
+    )
+    ap.add_argument(
         "--full", action="store_true", help="mark every row stale, then refresh"
     )
     ap.add_argument(
         "--dry-run", action="store_true", help="print how many bills would be rebuilt"
     )
     args = ap.parse_args(argv)
+    if args.bill_list_index and args.command != "ensure":
+        ap.error("--bill-list-index only works with the `ensure` command")
     jid = (
         lookup(abbr=args.jurisdiction.lower()).jurisdiction_id
         if args.jurisdiction
@@ -477,6 +525,12 @@ def _cli(argv=None) -> int:
         ensure_schema(conn)
         if args.command == "ensure":
             print("=== BILL SEARCH ENSURE: ddp_bill_search present ===")
+            if args.bill_list_index:
+                created = ensure_bill_list_order_index(conn)
+                print(
+                    f"=== BILL LIST ENSURE: {BILL_LIST_ORDER_INDEX} "
+                    f"{'created' if created else 'already present'} ==="
+                )
             return 0
         if args.dry_run:
             print(
