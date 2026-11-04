@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from api import search_projection as sp
+from api.bill_version_flag import forget_check
 from api.db.models import (
     Bill,
     BillAbstract,
@@ -801,3 +802,88 @@ def test_cli_reports_busy_with_nonzero_exit(world, monkeypatch, capsys):
                     {"k": sp._lock_key(AK)},
                 )
     assert "another refresh holds the lock" in capsys.readouterr().out
+
+
+# --- OPEN-422: the archiver's is_bill_version answer picks the indexed text ---------------------
+
+
+def _flag_document(db, doc, value):
+    db.query(BillVersionDocument).filter(BillVersionDocument.id == doc.id).update(
+        {BillVersionDocument.is_bill_version: value}
+    )
+    db.commit()
+
+
+def _bill_with_an_amendment_list(world, n):
+    bill = add_bill(world, n)
+    add_doc(world, bill, "AN ACT designating the scorpion as the state arachnid.")
+    amendment = add_doc(
+        world,
+        bill,
+        "Line 3, strike lizard, insert gecko.",
+        note="Judiciary Subcommittee Amendment",
+    )
+    return bill, amendment
+
+
+def test_an_amendment_list_flagged_not_a_version_is_not_the_indexed_text(world):
+    bill, amendment = _bill_with_an_amendment_list(world, 1)
+    _flag_document(world, amendment, False)
+    refresh()
+    assert search_ids("scorpion") == [bill.id]
+    assert search_ids("lizard") == []
+
+
+def test_an_amendment_list_not_decided_yet_is_still_the_indexed_text(world):
+    bill, _ = _bill_with_an_amendment_list(world, 1)
+    refresh()
+    assert search_ids("lizard") == [bill.id]
+    assert search_ids("scorpion") == []
+
+
+def test_an_amendment_list_flagged_a_real_version_is_still_the_indexed_text(world):
+    bill, amendment = _bill_with_an_amendment_list(world, 1)
+    _flag_document(world, amendment, True)
+    refresh()
+    assert search_ids("lizard") == [bill.id]
+    assert search_ids("scorpion") == []
+
+
+def test_one_flagged_format_keeps_the_versions_other_formats_out_of_the_index(world):
+    bill = add_bill(world, 1)
+    add_doc(world, bill, "AN ACT designating the scorpion as the state arachnid.")
+    flagged = add_doc(
+        world, bill, "Line 3, strike lizard.", note="Judiciary Subcommittee Amendment"
+    )
+    add_doc(
+        world,
+        bill,
+        "Line 3, strike lizard (pdf copy).",
+        note="Judiciary Subcommittee Amendment",
+        media="application/pdf",
+    )
+    _flag_document(world, flagged, False)
+    refresh()
+    assert search_ids("lizard") == []
+    assert search_ids("scorpion") == [bill.id]
+
+
+def test_a_database_without_the_column_still_refreshes_the_projection(world):
+    bill, _ = _bill_with_an_amendment_list(world, 1)
+    with engine.begin() as conn:
+        conn.execute(
+            text("ALTER TABLE ddp_bill_version_document DROP COLUMN is_bill_version")
+        )
+    forget_check()
+    try:
+        refresh()
+        assert search_ids("lizard") == [bill.id]
+    finally:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE ddp_bill_version_document "
+                    "ADD COLUMN is_bill_version boolean"
+                )
+            )
+        forget_check()

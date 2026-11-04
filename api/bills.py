@@ -11,6 +11,7 @@ from .schemas import Bill
 from .pagination import Pagination
 from .auth import apikey_auth
 from .utils import jurisdiction_filter
+from .bill_version_flag import flag_column_present
 from .version_ordering import (
     STAGE_AMENDMENT,
     STAGE_CHAMBER_PASSAGE,
@@ -154,6 +155,30 @@ class BillPagination(Pagination):
         return chosen
 
     @classmethod
+    def _flagged_not_a_version(cls, db, data):
+        """OPEN-422: {(note, date)} of this bill's versions whose archived documents the
+        archiver flagged is_bill_version = False (a procedural paper, not a bill version).
+        Empty when the database does not have the column yet, and for NULL (not decided).
+        The archiver derives the flag from the note, so every saved format of a version
+        carries the same answer; one query per bill, not one per version."""
+        if not flag_column_present(db):
+            return set()
+        rows = (
+            db.query(
+                models.BillVersionDocument.version_note,
+                models.BillVersionDocument.version_date,
+            )
+            .filter(
+                models.BillVersionDocument.bill_id == data.id,
+                models.BillVersionDocument.is_bill_version.is_(False),
+                models.BillVersionDocument.is_error.is_(False),
+            )
+            .distinct()
+            .all()
+        )
+        return {(note, date) for note, date in rows}
+
+    @classmethod
     def postprocess_includes(cls, obj, data, includes, *, detail=False):
         """
         Attach archived raw_text (OPEN-13) and diff_from_previous_version to every
@@ -167,6 +192,15 @@ class BillPagination(Pagination):
             return
 
         db = object_session(data)
+        flagged = cls._flagged_not_a_version(db, data)
+
+        def unplaced(version):
+            # A note the stage classifier cannot place, or a document the archiver flagged as
+            # not a bill version (OPEN-422): both stay out of latest/previous and the lineage.
+            return (
+                note_stage(version.note)[0] == STAGE_UNKNOWN
+                or (version.note, version.date) in flagged
+            )
 
         # OPEN-92: "latest"/"previous" must be resolved via openstates-core's own audited,
         # content-based stage classifier (version_sort_key, OPEN-34) -- not a naive (date,
@@ -182,16 +216,14 @@ class BillPagination(Pagination):
         # latest/previous selection entirely, matching openstates-core's own
         # archive_bill_versions()/text_extract.py posture: a version this classifier can't
         # confidently place is never guessed into the diff lineage.
-        classifiable = [
-            v for v in data.versions if note_stage(v.note)[0] != STAGE_UNKNOWN
-        ]
+        classifiable = [v for v in data.versions if not unplaced(v)]
         # DDP: STAGE_UNKNOWN versions stay out of latest/previous and the diff lineage, and
         # keep NO link-level raw_text or diff (LegBot's readers take versions[-1]/[-2] and
         # must not start seeing them). They are still archived documents, though; expose
         # their id and text in separate, additive fields so an embedding consumer can index
         # them labelled "unknown".
         for version in data.versions:
-            if note_stage(version.note)[0] != STAGE_UNKNOWN:
+            if not unplaced(version):
                 continue
             version_obj = obj.versions[list(data.versions).index(version)]
             version_obj.version_stage = STAGE_LABELS[STAGE_UNKNOWN]
@@ -241,11 +273,7 @@ class BillPagination(Pagination):
         # versions[-1]/versions[-2] directly, no re-sort of its own required. This changes
         # array order only, never which/how many versions are returned.
         data_versions = list(data.versions)
-        unknown_stage_indexes = [
-            i
-            for i, v in enumerate(data_versions)
-            if note_stage(v.note)[0] == STAGE_UNKNOWN
-        ]
+        unknown_stage_indexes = [i for i, v in enumerate(data_versions) if unplaced(v)]
         ordered_indexes = [data_versions.index(v) for v in ordered]
         obj.versions = [obj.versions[i] for i in unknown_stage_indexes] + [
             obj.versions[i] for i in ordered_indexes

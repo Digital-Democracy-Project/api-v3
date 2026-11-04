@@ -536,9 +536,13 @@ def test_bills_include_actions(client):
 
 def test_bill_detail_versions_raw_text_populated_prefers_pdf(client):
     """OPEN-13: archived latest version exposes raw_text, preferring PDF over HTML."""
+    # The first request also asks the catalog whether is_bill_version exists (OPEN-422; repeated
+    # only every few minutes), so warm that check and count the steady state.
+    client.get("/bills/oh/2021/HB 9101?include=versions")
     response = client.get("/bills/oh/2021/HB 9101?include=versions").json()
-    # base bill query + versions + versions.links + the new archived-doc lookup query
-    assert query_logger.count == 4
+    # base bill query + versions + versions.links + the flagged-versions lookup (OPEN-422, one
+    # per bill, not per version) + the archived-doc lookup query
+    assert query_logger.count == 5
     assert response["identifier"] == "HB 9101"
     assert len(response["versions"]) == 1
     links = {link["media_type"]: link for link in response["versions"][0]["links"]}

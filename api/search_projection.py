@@ -22,6 +22,7 @@ from typing import Dict, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .bill_version_flag import flag_column_present
 from .version_ordering import (
     STAGE_UNKNOWN,
     note_stage,
@@ -165,13 +166,27 @@ _STALE_FROM_WHERE = """
 STALE_SQL = text("SELECT b.id " + _STALE_FROM_WHERE + " ORDER BY b.id LIMIT :limit")
 STALE_COUNT_SQL = text("SELECT count(*) " + _STALE_FROM_WHERE)
 
-DOCS_SQL = text(
-    """
+_DOCS_SQL = """
     SELECT d.id, d.bill_id, d.version_note, d.version_date, d.media_type,
            char_length(d.raw_text) AS n_chars, d.source_url, b.identifier
     FROM ddp_bill_version_document d
     JOIN opencivicdata_bill b ON b.id = d.bill_id
     WHERE d.bill_id = ANY(:bill_ids) AND NOT d.is_error AND coalesce(d.raw_text, '') <> ''
+"""
+DOCS_SQL = text(_DOCS_SQL)
+# OPEN-422: the archiver's own answer (NULL = not decided yet, so it stays a candidate), used only
+# when the database has the column (api/bill_version_flag.py). Same rule as the bill detail: a
+# version whose saved documents include one flagged False is not a bill version, so its other
+# formats are skipped too (the flag comes from the note, so a mix only exists while a recompute
+# is part-way).
+DOCS_SQL_SKIPPING_FLAGGED = text(
+    _DOCS_SQL
+    + """    AND d.is_bill_version IS NOT FALSE
+    AND NOT EXISTS (
+        SELECT 1 FROM ddp_bill_version_document f
+        WHERE f.bill_id = d.bill_id AND f.version_note = d.version_note
+          AND f.version_date = d.version_date
+          AND NOT f.is_error AND f.is_bill_version IS FALSE)
 """
 )
 
@@ -380,6 +395,11 @@ def _refresh_one(
     more = False
     try:
         ensure_schema(conn)
+        # Its own short transaction: the first check queries the catalog, and a transaction left
+        # open would make the REPEATABLE READ statement below fail.
+        with conn.begin():
+            flagged_docs_known = flag_column_present(conn)
+        docs_sql = DOCS_SQL_SKIPPING_FLAGGED if flagged_docs_known else DOCS_SQL
         while True:
             with conn.begin():
                 # One snapshot for choosing documents and for the upsert's own reads (including the
@@ -398,7 +418,7 @@ def _refresh_one(
                 ]
                 if not ids:
                     break
-                doc_rows = conn.execute(DOCS_SQL, {"bill_ids": ids}).fetchall()
+                doc_rows = conn.execute(docs_sql, {"bill_ids": ids}).fetchall()
                 picks = pick_current_docs(doc_rows)
                 chars_by_doc = {r[0]: r[5] for r in doc_rows}
                 taken = _within_text_budget(ids, picks, chars_by_doc)
