@@ -70,7 +70,10 @@ class Pagination:
             )
 
         if not skip_count:
-            total_items = results.count()
+            # OPEN-484: a count does not depend on the order, but Query.count() keeps the ORDER BY inside its
+            # subquery, so Postgres sorted every row only to count it (80 ms against 30 ms for the bill list on
+            # the 87,489-bill copy, same number).
+            total_items = results.order_by(None).count()
             num_pages = math.ceil(total_items / self.per_page) or 1
         else:
             # used for people.geo, always fits on one page
