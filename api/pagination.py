@@ -31,6 +31,10 @@ class Pagination:
     pagination.
     """
 
+    # OPEN-493: a list may allow a bigger page when no include= is asked for (the bare rows are cheap; an include=
+    # loads related rows for every bill, so it keeps max_per_page). None: the same limit with or without include=.
+    max_per_page_without_includes = None
+
     def __init__(self, page: int = 1, per_page: int = 10):
         self.page = page
         self.per_page = per_page
@@ -63,10 +67,13 @@ class Pagination:
                 status_code=500, detail="ordering is required for pagination"
             )
 
-        if self.per_page < 1 or self.per_page > self.max_per_page:
+        max_per_page = self.max_per_page
+        if not includes and self.max_per_page_without_includes:
+            max_per_page = self.max_per_page_without_includes
+        if self.per_page < 1 or self.per_page > max_per_page:
             raise HTTPException(
                 status_code=400,
-                detail=f"invalid per_page, must be in [1, {self.max_per_page}]",
+                detail=f"invalid per_page, must be in [1, {max_per_page}]",
             )
 
         if not skip_count:

@@ -76,6 +76,9 @@ class BillPagination(Pagination):
         BillInclude.actions: ["actions", "actions.related_entities"],
     }
     max_per_page = 20
+    # OPEN-493: the bare list (no include=) allows 50 a page, so the website's 50-row page is one call and one count
+    # instead of three; an include= keeps 20 (the heavier answers stay bounded). The default per_page is unchanged.
+    max_per_page_without_includes = 50
 
     @classmethod
     def _archived_row_for(cls, db, data, version):
