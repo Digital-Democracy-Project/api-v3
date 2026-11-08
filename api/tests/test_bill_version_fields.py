@@ -13,6 +13,7 @@ import pytest
 from api.db.models import Bill, BillVersion, BillVersionDocument, BillVersionLink
 from api.version_ordering import (
     STAGE_AMENDMENT,
+    STAGE_CHAMBER_PASSAGE,
     STAGE_ENACTED,
     STAGE_FINAL_PASSAGE,
     STAGE_INTRODUCED,
@@ -674,6 +675,49 @@ def test_nebraska_amendment_ordinal_is_the_last_amendment_number():
     )
     assert note_stage("Printer's No. PN0130") == (STAGE_AMENDMENT, 130.0)
     assert note_stage("Final Reading") == (STAGE_FINAL_PASSAGE, 0.5)
+
+
+def test_louisiana_versions_are_ordered_by_name_not_storage_order(client):
+    """OPEN-510: SB 217's real notes, created in the reversed order the ticket found. Louisiana
+    versions have no date, and Engrossed / Reengrossed / Re-Reengrossed used to tie, so the
+    latest and previous versions came out in storage order. api-v3's copy of the ordering must
+    agree with the archiver's."""
+    notes = [
+        "SB217 Original",
+        "SB217 Engrossed",
+        "SB217 Reengrossed",
+        "SB217 Re-Reengrossed",
+        "SB217 Enrolled",
+        "SB217 Act",
+    ]
+    with _temp_bill(
+        "SB 9510",
+        [
+            (note, [(f"https://example.com/t510-{i}.pdf", "application/pdf", note)])
+            for i, note in reversed(list(enumerate(notes)))
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+    assert [v["note"] for v in versions] == notes
+    assert [v["version_ordinal"] for v in versions] == list(range(len(notes)))
+
+
+@pytest.mark.parametrize(
+    ("note", "expected"),
+    [
+        ("SB217 Engrossed", (STAGE_CHAMBER_PASSAGE, 0.0)),
+        ("SB217 Reengrossed", (STAGE_CHAMBER_PASSAGE, 1.0)),
+        ("HB519 Re-Reengrossed", (STAGE_CHAMBER_PASSAGE, 2.0)),
+        # exact shapes, as in openstates-core: Virginia's bare note and near misses keep the
+        # generic rule's rank
+        ("Reengrossed", (STAGE_CHAMBER_PASSAGE, 0.0)),
+        ("SB 217 Reengrossed", (STAGE_CHAMBER_PASSAGE, 0.0)),
+        ("SB217 Reengrossed Copy", (STAGE_CHAMBER_PASSAGE, 0.0)),
+        ("Senate Engrossed Version", (STAGE_CHAMBER_PASSAGE, 0.0)),
+    ],
+)
+def test_louisiana_engrossment_ranks(note, expected):
+    assert note_stage(note) == expected
 
 
 def test_bill_with_only_unknown_versions_still_gets_unknown_fields(client):
