@@ -175,6 +175,17 @@ def note_stage(note: str) -> tuple:
     ):
         return (STAGE_CHAMBER_PASSAGE, extract_ordinal(note))
 
+    # OPEN-510: Louisiana's "<bill> Engrossed" / "<bill> Reengrossed" / "<bill> Re-Reengrossed",
+    # copied verbatim from openstates-core (Digital-Democracy-Project/openstates-core, branch
+    # fix/OPEN-510-la-reengrossed-order; see its comment for the evidence). Exact shapes, so no other
+    # jurisdiction's note is pulled in.
+    la_engrossed = re.fullmatch(r"[a-z]+\d+ (re-re|re)?engrossed", lowered)
+    if la_engrossed:
+        return (
+            STAGE_CHAMBER_PASSAGE,
+            {None: 0.0, "re": 1.0, "re-re": 2.0}[la_engrossed.group(1)],
+        )
+
     if "engross" in lowered and not re.search(r"substitute|committee", lowered):
         return (STAGE_CHAMBER_PASSAGE, extract_ordinal(note))
 
