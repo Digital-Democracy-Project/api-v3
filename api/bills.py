@@ -87,7 +87,10 @@ class BillPagination(Pagination):
         db/models/bills.py), so this matches by content instead: bill + version note/date +
         link url, same natural key openstates-core's archive_bill_versions() writes. When a
         version has several archived formats, the XML text wins (OPEN-317: no page headers,
-        page numbers or line-wrap debris), then PDF, then anything else with text. The
+        page numbers or line-wrap debris), then OpenDocument text, then PDF, then anything else
+        with text. OPEN-516: OpenDocument is Pennsylvania's "DOC" printing, the only source where
+        struck-out words are marked and left out; that state's PDFs archived before it stay
+        stored, so without this the PDF (struck words included) would keep winning. The
         archiver itself no longer prefers any type (OPEN-217 keeps one diff baseline per media
         type), so this priority is the API's own. Whitespace-only text does not count as text
         (OPEN-365). Rows sharing a media type resolve to the one with the last source_url, which
@@ -97,7 +100,8 @@ class BillPagination(Pagination):
         every instance replicating the table, picks the same row. Media types are compared as
         exact strings: the archive holds only text/xml,
         application/pdf and text/html (checked 2026-10-02: no NULL types, no parameterized or
-        mixed-case variants, no whitespace-only text), so no normalization is needed."""
+        mixed-case variants, no whitespace-only text), plus, from OPEN-516,
+        application/vnd.oasis.opendocument.text, so no normalization is needed."""
         if not version.links:
             return None
 
@@ -128,6 +132,7 @@ class BillPagination(Pagination):
             return None
         return (
             by_media_type.get("text/xml")
+            or by_media_type.get("application/vnd.oasis.opendocument.text")
             or by_media_type.get("application/pdf")
             or next(iter(by_media_type.values()))
         )
