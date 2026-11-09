@@ -853,3 +853,51 @@ def test_arizona_senate_bill_mirrors_it(client):
         "HOUSE - Education",
         "House Engrossed Version",
     ]
+
+
+def test_opendocument_row_preferred_over_pdf_and_html(client):
+    """OPEN-516: Pennsylvania's text comes from its OpenDocument printing (struck-out words left
+    out), while the PDF archived for the same version before that change stays stored. The
+    OpenDocument row must win over the PDF, whichever URL sorts last, and XML still wins over it."""
+    odt = "application/vnd.oasis.opendocument.text"
+    with _temp_bill(
+        "HB 9216",
+        [
+            (
+                "Printer's No. PN3586",
+                [
+                    (
+                        "https://example.com/PDF/PN3586",
+                        "application/pdf",
+                        "pdf with struck",
+                    ),
+                    ("https://example.com/DOC/PN3586", odt, "odt text"),
+                    ("https://example.com/HTM/PN3586", "text/html", "html text"),
+                ],
+            ),
+            (
+                "Printer's No. PN3751",
+                [
+                    ("https://example.com/DOC/PN3751", odt, "odt struck removed"),
+                    ("https://example.com/PDF/PN3751", "application/pdf", None),
+                    ("https://example.com/XML/PN3751", "text/xml", "xml text"),
+                ],
+            ),
+        ],
+    ) as bill_id:
+        versions = _get(client, bill_id)
+        first_id = _doc_id("HB 9216", "https://example.com/DOC/PN3586")
+        second_id = _doc_id("HB 9216", "https://example.com/XML/PN3751")
+    first, second = versions
+    assert first["archived_document_id"] == first_id
+    assert second["archived_document_id"] == second_id
+    raw = {
+        link["url"]: link.get("raw_text")
+        for v in versions
+        for link in v["links"]
+        if link.get("raw_text")
+    }
+    assert raw == {
+        "https://example.com/DOC/PN3586": "odt text",
+        "https://example.com/XML/PN3751": "xml text",
+    }
