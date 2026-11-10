@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from . import search_projection
+from .bill_types import BILL_TYPES, SQL_IS_BILL_TYPE
 from .auth import apikey_auth
 from .db import engine, get_db
 
@@ -50,6 +51,19 @@ _SESSION_FILTER = (
     "AND (CAST(:session AS varchar) IS NULL OR s.session_identifier = :session)"
 )
 
+# OPEN-519: with `bill_types_only`, a bill whose label is not a bill type (a Massachusetts report, order, communication
+# or study request) is left out. The label is read from opencivicdata_bill when the query runs, never copied into
+# ddp_bill_search: the OPEN-517 relabel does not move updated_at, so a copied label would never be refreshed.
+_BILL_TYPE_FILTER = (
+    "AND (NOT CAST(:bill_types_only AS boolean) OR EXISTS ("
+    f"SELECT 1 FROM opencivicdata_bill b WHERE b.id = s.bill_id AND {SQL_IS_BILL_TYPE}))"
+)
+
+
+def _bill_type_params(bill_types_only: bool) -> dict:
+    return {"bill_types_only": bill_types_only, "bill_types": list(BILL_TYPES)}
+
+
 # Snippet = first abstract, 240 chars: OpenStates' own public description of the bill. Selected
 # only for the rows that survive LIMIT, never for the whole candidate set.
 _SNIPPET_LATERAL = """
@@ -66,7 +80,7 @@ EXACT_SQL = text(
         SELECT {_BILL_COLUMNS}, 1.0::float AS score
         FROM ddp_bill_search s
         WHERE s.identifier_norm = upper(regexp_replace(:q, '[\\s.-]', '', 'g'))
-          AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
+          AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER} {_BILL_TYPE_FILTER}
         ORDER BY s.latest_action_date DESC NULLS LAST
         LIMIT :limit
     )
@@ -97,7 +111,7 @@ def _fts_sql(phrase: bool):
     WITH hits AS (
         SELECT {_BILL_COLUMNS}, ts_rank_cd(s.fts, query)::float AS score
         FROM ddp_bill_search s, websearch_to_tsquery('english', :q) query
-        WHERE s.fts @@ query AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
+        WHERE s.fts @@ query AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER} {_BILL_TYPE_FILTER}
         ORDER BY {order}score DESC, s.latest_action_date DESC NULLS LAST
         LIMIT :limit
     )
@@ -121,7 +135,7 @@ def _fuzzy_title_sql(phrase: bool):
     WITH hits AS (
         SELECT {_BILL_COLUMNS}, word_similarity(:q, s.title)::float AS score
         FROM ddp_bill_search s
-        WHERE :q <% s.title AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
+        WHERE :q <% s.title AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER} {_BILL_TYPE_FILTER}
         ORDER BY score DESC, s.latest_action_date DESC NULLS LAST
         LIMIT :limit
     )
@@ -138,7 +152,7 @@ def _fuzzy_title_sql(phrase: bool):
                {_PHRASE_LEN} AS phrase_len
         FROM ddp_bill_search s
         WHERE (:q <% s.title OR s.alt_titles ~* :like)
-          AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
+          AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER} {_BILL_TYPE_FILTER}
         ORDER BY score DESC, phrase_len NULLS LAST, s.latest_action_date DESC NULLS LAST
         LIMIT :limit
     )
@@ -157,9 +171,11 @@ HYDRATE_BILLS_SQL = text(
     WITH hits AS (
         SELECT {_BILL_COLUMNS}, 0.0::float AS score
         FROM ddp_bill_search s
-        WHERE s.bill_id = ANY(:ids) AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
+        WHERE s.bill_id = ANY(:ids) AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER} {_BILL_TYPE_FILTER}
     )
-    SELECT hits.*, ab.snippet FROM hits {_SNIPPET_LATERAL}
+    SELECT hits.*, ab.snippet,
+           (SELECT b.classification FROM opencivicdata_bill b WHERE b.id = hits.bill_id) AS classification
+    FROM hits {_SNIPPET_LATERAL}
 """
 )
 
@@ -223,7 +239,7 @@ PREFIX_SQL = text(
                length(s.identifier_norm) AS norm_len
         FROM ddp_bill_search s
         WHERE s.identifier_norm LIKE upper(regexp_replace(:q, '[\\s.-]', '', 'g')) || '%'
-          AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER}
+          AND s.jurisdiction_id = ANY(:jids) {_SESSION_FILTER} {_BILL_TYPE_FILTER}
         ORDER BY norm_len, s.latest_action_date DESC NULLS LAST,
                  s.identifier_norm, s.jurisdiction_id, s.bill_id
         LIMIT :limit
@@ -533,6 +549,10 @@ def search(
     ),
     types: List[str] = Query(["bill", "person"], description="Any of: bill, person."),
     limit: int = Query(20, ge=1, le=MAX_LIMIT),
+    bill_types_only: bool = Query(
+        False,
+        description="OPEN-519: bills only of a bill type (api/bill_types.py); off by default.",
+    ),
     db: Session = Depends(get_db),
     auth: str = Depends(apikey_auth),
 ):
@@ -550,6 +570,7 @@ def search(
         "limit": limit,
         "session": session,
         "like": _like(q),
+        **_bill_type_params(bill_types_only),
     }
     _use_similarity_threshold(db)
 
@@ -585,6 +606,10 @@ def suggest(
     q: str = Query(...),
     jurisdiction: List[str] = Query([]),
     limit: int = Query(8, ge=1, le=10),
+    bill_types_only: bool = Query(
+        False,
+        description="OPEN-519: bills only of a bill type (api/bill_types.py); off by default.",
+    ),
     db: Session = Depends(get_db),
     auth: str = Depends(apikey_auth),
 ):
@@ -593,7 +618,14 @@ def suggest(
     started = time.monotonic()
     q = _validated_query(q, 2, 100)
     jids = _jurisdiction_ids(jurisdiction)
-    params = {"q": q, "jids": jids, "limit": limit, "session": None, "like": _like(q)}
+    params = {
+        "q": q,
+        "jids": jids,
+        "limit": limit,
+        "session": None,
+        "like": _like(q),
+        **_bill_type_params(bill_types_only),
+    }
     _use_similarity_threshold(db)
 
     results: List[dict] = []
@@ -625,6 +657,10 @@ def hydrate(
     session: Optional[str] = Query(
         None, description="Exact session identifier; bills only."
     ),
+    bill_types_only: bool = Query(
+        False,
+        description="OPEN-519: bills only of a bill type (api/bill_types.py); off by default.",
+    ),
     db: Session = Depends(get_db),
     auth: str = Depends(apikey_auth),
 ):
@@ -636,11 +672,16 @@ def hydrate(
     person_ids = [i for i in ids if i.startswith("ocd-person/")]
     hits = []
     if bill_ids:
+        params = {
+            "ids": bill_ids,
+            "jids": jids,
+            "session": session,
+            **_bill_type_params(bill_types_only),
+        }
+        # OPEN-519: each bill's label, so a caller can see what an item is
         hits += [
-            _bill_hit(r)
-            for r in db.execute(
-                HYDRATE_BILLS_SQL, {"ids": bill_ids, "jids": jids, "session": session}
-            )
+            dict(_bill_hit(r), classification=list(r.classification or []))
+            for r in db.execute(HYDRATE_BILLS_SQL, params)
         ]
     if person_ids:
         hits += [
