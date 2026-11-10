@@ -8,6 +8,10 @@ GET /ddp/enrollment returns, per jurisdiction, which features it is enrolled in,
 instead of each keeping a hand-edited copy. Read-only, and a trimmed view: no scrape timeouts, WAF or onboarding
 detail. The file is re-read when its mtime changes, so a `git pull` of the checkout is picked up without a restart.
 
+No `tier` (OPEN-520): the manifest is dropping it (OPEN-521, ddp-sync decides timing), and no reader of this route used
+it (the broker reads only `enrollment.replica_routing`). The loader reads only name, status, archive.enabled and the
+enrollment block, so a manifest with or without `tier` (or `archive.scheduled`) is served the same.
+
 If the file is missing or not in the expected shape the answer is 503 with the reason, never an empty list: a
 caller that cannot get the list must say so, not quietly serve "nothing is enrolled".
 """
@@ -38,7 +42,6 @@ class JurisdictionEnrollment(BaseModel):
         example="probing",
         description="probing | scraping | validating | archived | live | paused",
     )
-    tier: str = Field(..., example="secondary", description="primary | secondary")
     archive: bool = Field(..., description="archive.enabled in the manifest")
     enrollment: Dict[str, bool] = Field(
         ...,
@@ -86,7 +89,6 @@ def _load(path: str):
             parsed[str(code).lower()] = {
                 "name": entry["name"],
                 "status": entry["status"],
-                "tier": entry["tier"],
                 "archive": bool(entry["archive"]["enabled"]),
                 "enrollment": dict(enrollment),
             }

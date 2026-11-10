@@ -11,18 +11,23 @@ from api import ddp_enrollment
 URL = "/ddp/enrollment"
 
 
-def _entry(status="live", tier="secondary", archive=True, **enrollment):
+def _entry(status="live", tier="secondary", archive=True, scheduled=None, **enrollment):
+    """One manifest entry. tier=None leaves `tier` out (the shape after OPEN-521); `scheduled` is set only if given."""
     base = {"people_refresh": True, "search_refresh": False, "replica_routing": True}
     base.update(enrollment)
-    return {
+    entry = {
         "name": "Somewhere",
         "status": status,
-        "tier": tier,
         "scrape": {"timeout_s": 21600},  # not served
         "archive": {"enabled": archive, "timeout_s": 14400},
         "enrollment": base,
         "waf": {"profile": "none"},
     }
+    if tier is not None:
+        entry["tier"] = tier
+    if scheduled is not None:
+        entry["archive"]["scheduled"] = scheduled
+    return entry
 
 
 @pytest.fixture
@@ -48,7 +53,6 @@ def test_serves_every_jurisdiction_with_its_features(client, manifest):
     assert nc == {
         "name": "Somewhere",
         "status": "probing",
-        "tier": "secondary",
         "archive": True,
         "enrollment": {
             "people_refresh": True,
@@ -62,8 +66,78 @@ def test_serves_every_jurisdiction_with_its_features(client, manifest):
 
 def test_does_not_serve_internal_detail(client, manifest):
     text = client.get(URL).text
-    for private in ("timeout_s", "waf", "onboarding", "scrape"):
+    for private in ("timeout_s", "waf", "onboarding", "scrape", "tier"):
         assert private not in text
+
+
+def _serve(client, tmp_path, monkeypatch, manifest_dict):
+    path = tmp_path / "jurisdictions.yaml"
+    path.write_text(yaml.safe_dump(manifest_dict))
+    monkeypatch.setenv(ddp_enrollment.MANIFEST_ENV, str(path))
+    ddp_enrollment._cache.clear()
+    response = client.get(URL)
+    assert response.status_code == 200, response.text
+    return response.json()["jurisdictions"]
+
+
+EXPECTED_PA = {
+    "name": "Somewhere",
+    "status": "live",
+    "archive": True,
+    "enrollment": {
+        "people_refresh": True,
+        "search_refresh": False,
+        "replica_routing": True,
+    },
+}
+EXPECTED_NE = {
+    "name": "Somewhere",
+    "status": "scraping",
+    "archive": False,
+    "enrollment": {
+        "people_refresh": True,
+        "search_refresh": False,
+        "replica_routing": False,
+    },
+}
+
+
+def test_a_manifest_with_tier_and_archive_scheduled_is_served_without_tier(
+    client, tmp_path, monkeypatch
+):
+    """OPEN-520: today's manifest shape (tier, archive.scheduled) answers 200, and tier is no longer served."""
+    served = _serve(
+        client,
+        tmp_path,
+        monkeypatch,
+        {
+            "pa": _entry(tier="primary", scheduled=True),
+            "ne": _entry(
+                "scraping",
+                tier="secondary",
+                archive=False,
+                scheduled=False,
+                replica_routing=False,
+            ),
+        },
+    )
+    assert served == {"pa": EXPECTED_PA, "ne": EXPECTED_NE}
+
+
+def test_a_manifest_without_tier_or_archive_scheduled_is_served(
+    client, tmp_path, monkeypatch
+):
+    """OPEN-520: the shape after OPEN-521 (no tier, no archive.scheduled) answers 200 with the same content, not 503."""
+    served = _serve(
+        client,
+        tmp_path,
+        monkeypatch,
+        {
+            "pa": _entry(tier=None),
+            "ne": _entry("scraping", tier=None, archive=False, replica_routing=False),
+        },
+    )
+    assert served == {"pa": EXPECTED_PA, "ne": EXPECTED_NE}
 
 
 def test_a_changed_file_is_picked_up_without_a_restart(client, manifest):
