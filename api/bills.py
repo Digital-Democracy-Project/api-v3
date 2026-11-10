@@ -12,6 +12,7 @@ from .pagination import Pagination
 from .auth import apikey_auth
 from .utils import jurisdiction_filter
 from .bill_version_flag import flag_column_present
+from .bill_types import is_bill_type_clause
 from .version_ordering import (
     STAGE_AMENDMENT,
     STAGE_CHAMBER_PASSAGE,
@@ -330,6 +331,14 @@ async def bills_search(
     classification: Optional[str] = Query(
         None, description="Filter by classification, e.g. bill or resolution"
     ),
+    bill_types_only: bool = Query(
+        False,
+        description=(
+            "OPEN-519: only items whose classification is a bill type (api/bill_types.py), so papers "
+            "filed under bill numbers that are not bills (reports, orders, communications, study "
+            "requests) are neither listed nor counted. Off by default."
+        ),
+    ),
     subject: Optional[List[str]] = Query(
         [], description="Filter by one or more subjects."
     ),
@@ -436,6 +445,8 @@ async def bills_search(
         query = query.filter(models.Bill.identifier.in_(identifiers))
     if classification:
         query = query.filter(models.Bill.classification.any(classification))
+    if bill_types_only:
+        query = query.filter(is_bill_type_clause(models.Bill.classification))
     if subject:
         query = query.filter(models.Bill.subject.contains(subject))
     if sponsor:
