@@ -14,15 +14,21 @@ enrollment block, so a manifest with or without `tier` (or `archive.scheduled`) 
 
 If the file is missing or not in the expected shape the answer is 503 with the reason, never an empty list: a
 caller that cannot get the list must say so, not quietly serve "nothing is enrolled".
+
+BROKER-368: two per-state facts the broker used to keep in its own code are served too, as the manifest states them:
+`actions` (`newest_first`: OpenStates lists the state's bill actions newest first) and `voatz` (`creator_id`,
+`test_precinct`: the Voatz poll creator id and test precinct, null when unknown). An entry without the block (a manifest
+older than BROKER-368) is served without the key, never with a guessed value, so the broker can tell "the manifest does
+not say yet" from "the manifest says no"; a block in the wrong shape is a 503 like any other.
 """
 import datetime
 import os
 import threading
-from typing import Dict
+from typing import Dict, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr
 
 from .auth import apikey_auth
 
@@ -33,6 +39,23 @@ DEFAULT_MANIFEST_PATH = "/app/jurisdictions.yaml"
 
 _lock = threading.Lock()
 _cache = {}  # path -> (mtime, parsed jurisdictions dict)
+
+
+class Actions(BaseModel):
+    newest_first: StrictBool = Field(
+        ...,
+        description="OpenStates lists this state's bill actions newest first (us, nc).",
+    )
+
+
+class Voatz(BaseModel):
+    creator_id: Optional[StrictInt] = Field(
+        ...,
+        description="The Voatz poll creatorId; null when unknown (no poll can be made).",
+    )
+    test_precinct: Optional[StrictStr] = Field(
+        ..., description="The Voatz test precinct; null when unknown (no test poll)."
+    )
 
 
 class JurisdictionEnrollment(BaseModel):
@@ -49,6 +72,14 @@ class JurisdictionEnrollment(BaseModel):
             "Every boolean under the manifest's `enrollment:` block, e.g. people_refresh, search_refresh, "
             "embedding, cloud_path, api_smoke_test, qa_sweep, replica_routing, legbot_replica."
         ),
+    )
+    actions: Optional[Actions] = Field(
+        None,
+        description="The manifest's `actions` block (BROKER-368); absent when the manifest has none.",
+    )
+    voatz: Optional[Voatz] = Field(
+        None,
+        description="The manifest's `voatz` block (BROKER-368); absent when the manifest has none.",
     )
 
 
@@ -86,13 +117,21 @@ def _load(path: str):
             enrollment = entry["enrollment"]
             if not all(isinstance(v, bool) for v in enrollment.values()):
                 raise TypeError("non-boolean enrollment value")
-            parsed[str(code).lower()] = {
+            row = {
                 "name": entry["name"],
                 "status": entry["status"],
                 "archive": bool(entry["archive"]["enabled"]),
                 "enrollment": dict(enrollment),
             }
-        except (KeyError, TypeError) as exc:
+            # BROKER-368: served only when the manifest has them; checked here, so
+            # a wrong shape is a 503 like any other, not a 500
+            if "actions" in entry:
+                row["actions"] = Actions(**entry["actions"]).dict()
+            if "voatz" in entry:
+                row["voatz"] = Voatz(**entry["voatz"]).dict()
+            parsed[str(code).lower()] = row
+        # pydantic's ValidationError is a ValueError
+        except (KeyError, TypeError, ValueError) as exc:
             raise _unavailable(
                 f"{path}: entry '{code}' is not in the expected shape ({exc})"
             )
@@ -104,6 +143,7 @@ def _load(path: str):
 @router.get(
     "",
     response_model=EnrollmentResponse,
+    response_model_exclude_unset=True,  # an entry without actions/voatz is served without the key (BROKER-368)
     summary="Which jurisdictions are enrolled in which feature",
 )
 def get_enrollment(auth: str = Depends(apikey_auth)):
