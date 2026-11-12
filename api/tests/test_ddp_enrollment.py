@@ -220,3 +220,78 @@ def test_an_unreadable_or_misshapen_manifest_is_503(
 
 def test_the_route_is_in_the_openapi_schema(client):
     assert URL in client.get("/openapi.json").json()["paths"]
+
+
+# --- BROKER-368: the actions and voatz blocks -------------------------------------------------------------------
+
+
+def _with_blocks(entry, newest_first=False, creator_id=None, test_precinct=None):
+    entry["actions"] = {"newest_first": newest_first}
+    entry["voatz"] = {"creator_id": creator_id, "test_precinct": test_precinct}
+    return entry
+
+
+def test_actions_and_voatz_are_served_as_the_manifest_states_them(
+    client, tmp_path, monkeypatch
+):
+    served = _serve(
+        client,
+        tmp_path,
+        monkeypatch,
+        {
+            "us": _with_blocks(
+                _entry(tier=None),
+                newest_first=True,
+                creator_id=900000912,
+                test_precinct="FEDERAL-TEST",
+            ),
+            "va": _with_blocks(_entry(tier=None), creator_id=900000977),
+            "pa": _with_blocks(_entry(tier=None)),
+        },
+    )
+    assert served["us"]["actions"] == {"newest_first": True}
+    assert served["us"]["voatz"] == {
+        "creator_id": 900000912,
+        "test_precinct": "FEDERAL-TEST",
+    }
+    # null is served as null (the manifest says "unknown"), not dropped
+    assert served["va"]["voatz"] == {"creator_id": 900000977, "test_precinct": None}
+    assert served["pa"] == {
+        **EXPECTED_PA,
+        "actions": {"newest_first": False},
+        "voatz": {"creator_id": None, "test_precinct": None},
+    }
+
+
+def test_an_entry_without_the_blocks_is_served_without_the_keys(
+    client, tmp_path, monkeypatch
+):
+    """A manifest older than BROKER-368: no key at all, never a guessed value, so a reader can tell "not said yet"."""
+    served = _serve(client, tmp_path, monkeypatch, {"pa": _entry(tier=None)})
+    assert served == {"pa": EXPECTED_PA}
+    assert "actions" not in served["pa"] and "voatz" not in served["pa"]
+
+
+@pytest.mark.parametrize(
+    "block,value",
+    [
+        ("actions", {"newest_first": "yes"}),
+        ("actions", {}),
+        ("actions", "true"),
+        ("voatz", {"creator_id": "900000837", "test_precinct": None}),
+        ("voatz", {"creator_id": None, "test_precinct": 12}),
+        ("voatz", {"creator_id": None}),
+    ],
+)
+def test_a_block_in_the_wrong_shape_is_a_503(
+    client, tmp_path, monkeypatch, block, value
+):
+    entry = _with_blocks(_entry(tier=None))
+    entry[block] = value
+    path = tmp_path / "jurisdictions.yaml"
+    path.write_text(yaml.safe_dump({"pa": entry}))
+    monkeypatch.setenv(ddp_enrollment.MANIFEST_ENV, str(path))
+    ddp_enrollment._cache.clear()
+    response = client.get(URL)
+    assert response.status_code == 503
+    assert "pa" in response.json()["detail"]
