@@ -16,8 +16,10 @@ If the file is missing or not in the expected shape the answer is 503 with the r
 caller that cannot get the list must say so, not quietly serve "nothing is enrolled".
 
 BROKER-368: two per-state facts the broker used to keep in its own code are served too, as the manifest states them:
-`actions` (`newest_first`: OpenStates lists the state's bill actions newest first) and `voatz` (`creator_id`,
-`test_precinct`: the Voatz poll creator id and test precinct, null when unknown). An entry without the block (a manifest
+`actions` (`newest_first`: OpenStates lists the state's bill actions newest first) and `voatz` (`test_precinct`: the
+Voatz test precinct, null when unknown). The Voatz poll creator id is NOT served (BROKER-482): it is private, lives in
+AWS Secrets Manager and the broker reads it there; a stray `creator_id` key in a manifest is dropped, never served.
+An entry without the block (a manifest
 older than BROKER-368) is served without the key, never with a guessed value, so the broker can tell "the manifest does
 not say yet" from "the manifest says no"; a block in the wrong shape is a 503 like any other.
 """
@@ -28,7 +30,7 @@ from typing import Dict, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr
+from pydantic import BaseModel, Field, StrictBool, StrictStr
 
 from .auth import apikey_auth
 
@@ -49,10 +51,8 @@ class Actions(BaseModel):
 
 
 class Voatz(BaseModel):
-    creator_id: Optional[StrictInt] = Field(
-        ...,
-        description="The Voatz poll creatorId; null when unknown (no poll can be made).",
-    )
+    # No creator_id (BROKER-482): it is private. Unknown keys are ignored (pydantic's default), so a stray one in a
+    # manifest is never served; a test pins that.
     test_precinct: Optional[StrictStr] = Field(
         ..., description="The Voatz test precinct; null when unknown (no test poll)."
     )

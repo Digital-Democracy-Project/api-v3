@@ -225,9 +225,9 @@ def test_the_route_is_in_the_openapi_schema(client):
 # --- BROKER-368: the actions and voatz blocks -------------------------------------------------------------------
 
 
-def _with_blocks(entry, newest_first=False, creator_id=None, test_precinct=None):
+def _with_blocks(entry, newest_first=False, test_precinct=None):
     entry["actions"] = {"newest_first": newest_first}
-    entry["voatz"] = {"creator_id": creator_id, "test_precinct": test_precinct}
+    entry["voatz"] = {"test_precinct": test_precinct}
     return entry
 
 
@@ -240,27 +240,36 @@ def test_actions_and_voatz_are_served_as_the_manifest_states_them(
         monkeypatch,
         {
             "us": _with_blocks(
-                _entry(tier=None),
-                newest_first=True,
-                creator_id=100000002,
-                test_precinct="FEDERAL-TEST",
+                _entry(tier=None), newest_first=True, test_precinct="FEDERAL-TEST"
             ),
-            "va": _with_blocks(_entry(tier=None), creator_id=100000003),
             "pa": _with_blocks(_entry(tier=None)),
         },
     )
     assert served["us"]["actions"] == {"newest_first": True}
-    assert served["us"]["voatz"] == {
-        "creator_id": 100000002,
-        "test_precinct": "FEDERAL-TEST",
-    }
+    assert served["us"]["voatz"] == {"test_precinct": "FEDERAL-TEST"}
     # null is served as null (the manifest says "unknown"), not dropped
-    assert served["va"]["voatz"] == {"creator_id": 100000003, "test_precinct": None}
     assert served["pa"] == {
         **EXPECTED_PA,
         "actions": {"newest_first": False},
-        "voatz": {"creator_id": None, "test_precinct": None},
+        "voatz": {"test_precinct": None},
     }
+
+
+def test_a_creator_id_in_the_manifest_is_never_served(client, tmp_path, monkeypatch):
+    """BROKER-482: Voatz poll creator ids are private (AWS Secrets Manager). A stray one in a manifest (an old copy on a
+    host) is dropped: neither the key nor the value appears anywhere in the answer."""
+    entry = _with_blocks(_entry(tier=None), test_precinct="FEDERAL-TEST")
+    entry["voatz"]["creator_id"] = 999000001  # made up
+    path = tmp_path / "jurisdictions.yaml"
+    path.write_text(yaml.safe_dump({"us": entry}))
+    monkeypatch.setenv(ddp_enrollment.MANIFEST_ENV, str(path))
+    ddp_enrollment._cache.clear()
+    response = client.get(URL)
+    assert response.status_code == 200
+    assert response.json()["jurisdictions"]["us"]["voatz"] == {
+        "test_precinct": "FEDERAL-TEST"
+    }
+    assert "creator_id" not in response.text and "999000001" not in response.text
 
 
 def test_an_entry_without_the_blocks_is_served_without_the_keys(
@@ -278,9 +287,8 @@ def test_an_entry_without_the_blocks_is_served_without_the_keys(
         ("actions", {"newest_first": "yes"}),
         ("actions", {}),
         ("actions", "true"),
-        ("voatz", {"creator_id": "100000001", "test_precinct": None}),
-        ("voatz", {"creator_id": None, "test_precinct": 12}),
-        ("voatz", {"creator_id": None}),
+        ("voatz", {"test_precinct": 12}),
+        ("voatz", {}),
     ],
 )
 def test_a_block_in_the_wrong_shape_is_a_503(
