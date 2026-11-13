@@ -15,13 +15,16 @@ enrollment block, so a manifest with or without `tier` (or `archive.scheduled`) 
 If the file is missing or not in the expected shape the answer is 503 with the reason, never an empty list: a
 caller that cannot get the list must say so, not quietly serve "nothing is enrolled".
 
-BROKER-368: two per-state facts the broker used to keep in its own code are served too, as the manifest states them:
-`actions` (`newest_first`: OpenStates lists the state's bill actions newest first) and `voatz` (`test_precinct`: the
-Voatz test precinct, null when unknown). The Voatz poll creator id is NOT served (BROKER-482): it is private, lives in
-AWS Secrets Manager and the broker reads it there; a stray `creator_id` key in a manifest is dropped, never served.
-An entry without the block (a manifest
-older than BROKER-368) is served without the key, never with a guessed value, so the broker can tell "the manifest does
-not say yet" from "the manifest says no"; a block in the wrong shape is a 503 like any other.
+BROKER-368: a per-state fact the broker used to keep in its own code is served too, as the manifest states it:
+`actions` (`newest_first`: OpenStates lists the state's bill actions newest first). An entry without the block (a
+manifest older than BROKER-368) is served without the key, never with a guessed value, so the broker can tell "the
+manifest does not say yet" from "the manifest says no"; a block in the wrong shape is a 503 like any other.
+
+Nothing Voatz is served (BROKER-494; Ramon, 2026-11-13: "api-v3 should only be serving up the ddp-open-states
+data. it's the responsibility of the broker to bring together data from openstates, voatz, legbot, etc."). A state's
+Voatz test precinct and its private poll creator id (BROKER-482) live in its Voatz entry in AWS Secrets Manager, read
+by the broker. A stray `voatz` block in a manifest (an older copy on a host) is ignored whatever it holds: never
+served, never a 503.
 """
 import datetime
 import os
@@ -30,7 +33,7 @@ from typing import Dict, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, StrictBool, StrictStr
+from pydantic import BaseModel, Field, StrictBool
 
 from .auth import apikey_auth
 
@@ -47,14 +50,6 @@ class Actions(BaseModel):
     newest_first: StrictBool = Field(
         ...,
         description="OpenStates lists this state's bill actions newest first (us, nc).",
-    )
-
-
-class Voatz(BaseModel):
-    # No creator_id (BROKER-482): it is private. Unknown keys are ignored (pydantic's default), so a stray one in a
-    # manifest is never served; a test pins that.
-    test_precinct: Optional[StrictStr] = Field(
-        ..., description="The Voatz test precinct; null when unknown (no test poll)."
     )
 
 
@@ -76,10 +71,6 @@ class JurisdictionEnrollment(BaseModel):
     actions: Optional[Actions] = Field(
         None,
         description="The manifest's `actions` block (BROKER-368); absent when the manifest has none.",
-    )
-    voatz: Optional[Voatz] = Field(
-        None,
-        description="The manifest's `voatz` block (BROKER-368); absent when the manifest has none.",
     )
 
 
@@ -123,12 +114,11 @@ def _load(path: str):
                 "archive": bool(entry["archive"]["enabled"]),
                 "enrollment": dict(enrollment),
             }
-            # BROKER-368: served only when the manifest has them; checked here, so
-            # a wrong shape is a 503 like any other, not a 500
+            # BROKER-368: served only when the manifest has it; checked here, so
+            # a wrong shape is a 503 like any other, not a 500. A `voatz` block is
+            # never read (BROKER-494).
             if "actions" in entry:
                 row["actions"] = Actions(**entry["actions"]).dict()
-            if "voatz" in entry:
-                row["voatz"] = Voatz(**entry["voatz"]).dict()
             parsed[str(code).lower()] = row
         # pydantic's ValidationError is a ValueError
         except (KeyError, TypeError, ValueError) as exc:
@@ -143,7 +133,7 @@ def _load(path: str):
 @router.get(
     "",
     response_model=EnrollmentResponse,
-    response_model_exclude_unset=True,  # an entry without actions/voatz is served without the key (BROKER-368)
+    response_model_exclude_unset=True,  # an entry without actions is served without the key (BROKER-368)
     summary="Which jurisdictions are enrolled in which feature",
 )
 def get_enrollment(auth: str = Depends(apikey_auth)):

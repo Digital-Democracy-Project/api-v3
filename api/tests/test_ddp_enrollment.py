@@ -222,54 +222,58 @@ def test_the_route_is_in_the_openapi_schema(client):
     assert URL in client.get("/openapi.json").json()["paths"]
 
 
-# --- BROKER-368: the actions and voatz blocks -------------------------------------------------------------------
+# --- BROKER-368: the actions block; BROKER-482/494: nothing Voatz -------------------------------------------------
 
 
-def _with_blocks(entry, newest_first=False, test_precinct=None):
+def _with_blocks(entry, newest_first=False):
     entry["actions"] = {"newest_first": newest_first}
-    entry["voatz"] = {"test_precinct": test_precinct}
     return entry
 
 
-def test_actions_and_voatz_are_served_as_the_manifest_states_them(
-    client, tmp_path, monkeypatch
-):
+def test_actions_is_served_as_the_manifest_states_it(client, tmp_path, monkeypatch):
     served = _serve(
         client,
         tmp_path,
         monkeypatch,
         {
-            "us": _with_blocks(
-                _entry(tier=None), newest_first=True, test_precinct="FEDERAL-TEST"
-            ),
+            "us": _with_blocks(_entry(tier=None), newest_first=True),
             "pa": _with_blocks(_entry(tier=None)),
         },
     )
     assert served["us"]["actions"] == {"newest_first": True}
-    assert served["us"]["voatz"] == {"test_precinct": "FEDERAL-TEST"}
-    # null is served as null (the manifest says "unknown"), not dropped
-    assert served["pa"] == {
-        **EXPECTED_PA,
-        "actions": {"newest_first": False},
-        "voatz": {"test_precinct": None},
-    }
+    assert served["pa"] == {**EXPECTED_PA, "actions": {"newest_first": False}}
 
 
-def test_a_creator_id_in_the_manifest_is_never_served(client, tmp_path, monkeypatch):
-    """BROKER-482: Voatz poll creator ids are private (AWS Secrets Manager). A stray one in a manifest (an old copy on a
-    host) is dropped: neither the key nor the value appears anywhere in the answer."""
-    entry = _with_blocks(_entry(tier=None), test_precinct="FEDERAL-TEST")
-    entry["voatz"]["creator_id"] = 999000001  # made up
+@pytest.mark.parametrize(
+    "voatz",
+    [
+        {"test_precinct": "FEDERAL-TEST"},
+        {"test_precinct": "FEDERAL-TEST", "creator_id": 999000001},  # made up
+        {"test_precinct": 12},
+        {},
+        "not a block",
+    ],
+)
+def test_a_voatz_block_in_the_manifest_is_never_served(
+    client, tmp_path, monkeypatch, voatz
+):
+    """BROKER-494: api-v3 serves only OpenStates data; Voatz values (the test precinct, and the private creator id of
+    BROKER-482) live in AWS Secrets Manager, read by the broker. A stray block in a manifest (an older copy on a host)
+    is ignored whatever it holds: neither a key nor a value appears in the answer, and it is never a 503."""
+    entry = _with_blocks(_entry(tier=None))
+    entry["voatz"] = voatz
     path = tmp_path / "jurisdictions.yaml"
     path.write_text(yaml.safe_dump({"us": entry}))
     monkeypatch.setenv(ddp_enrollment.MANIFEST_ENV, str(path))
     ddp_enrollment._cache.clear()
     response = client.get(URL)
     assert response.status_code == 200
-    assert response.json()["jurisdictions"]["us"]["voatz"] == {
-        "test_precinct": "FEDERAL-TEST"
+    assert response.json()["jurisdictions"]["us"] == {
+        **EXPECTED_PA,
+        "actions": {"newest_first": False},
     }
-    assert "creator_id" not in response.text and "999000001" not in response.text
+    for text in ("voatz", "test_precinct", "FEDERAL-TEST", "creator_id", "999000001"):
+        assert text not in response.text
 
 
 def test_an_entry_without_the_blocks_is_served_without_the_keys(
@@ -278,7 +282,7 @@ def test_an_entry_without_the_blocks_is_served_without_the_keys(
     """A manifest older than BROKER-368: no key at all, never a guessed value, so a reader can tell "not said yet"."""
     served = _serve(client, tmp_path, monkeypatch, {"pa": _entry(tier=None)})
     assert served == {"pa": EXPECTED_PA}
-    assert "actions" not in served["pa"] and "voatz" not in served["pa"]
+    assert "actions" not in served["pa"]
 
 
 @pytest.mark.parametrize(
@@ -287,8 +291,6 @@ def test_an_entry_without_the_blocks_is_served_without_the_keys(
         ("actions", {"newest_first": "yes"}),
         ("actions", {}),
         ("actions", "true"),
-        ("voatz", {"test_precinct": 12}),
-        ("voatz", {}),
     ],
 )
 def test_a_block_in_the_wrong_shape_is_a_503(
