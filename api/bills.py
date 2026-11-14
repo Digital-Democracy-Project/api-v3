@@ -13,6 +13,7 @@ from .auth import apikey_auth
 from .utils import jurisdiction_filter
 from .bill_version_flag import flag_column_present
 from .bill_types import is_bill_type_clause
+from .document_choice import preferred_document
 from .version_ordering import (
     STAGE_AMENDMENT,
     STAGE_CHAMBER_PASSAGE,
@@ -87,22 +88,12 @@ class BillPagination(Pagination):
         BillVersionDocument isn't FK-linked to BillVersion (see its docstring in
         db/models/bills.py), so this matches by content instead: bill + version note/date +
         link url, same natural key openstates-core's archive_bill_versions() writes. When a
-        version has several archived formats, the XML text wins (OPEN-317: no page headers,
-        page numbers or line-wrap debris), then OpenDocument text, then PDF, then anything else
-        with text. OPEN-516: OpenDocument is Pennsylvania's "DOC" printing, the only source where
-        struck-out words are marked and left out; that state's PDFs archived before it stay
-        stored, so without this the PDF (struck words included) would keep winning. The
-        archiver itself no longer prefers any type (OPEN-217 keeps one diff baseline per media
-        type), so this priority is the API's own. Whitespace-only text does not count as text
-        (OPEN-365). Rows sharing a media type resolve to the one with the last source_url, which
-        is the document the archiver keeps as a version's baseline (it walks links sorted by
-        media type and url and keeps the last text), so the document chosen for one version is
-        the baseline of the diff on the one chosen for the next (OPEN-369). Every request, and
-        every instance replicating the table, picks the same row. Media types are compared as
-        exact strings: the archive holds only text/xml,
-        application/pdf and text/html (checked 2026-10-02: no NULL types, no parameterized or
-        mixed-case variants, no whitespace-only text), plus, from OPEN-516,
-        application/vnd.oasis.opendocument.text, so no normalization is needed."""
+        version has several archived formats, document_choice.preferred_document() picks one:
+        XML, then OpenDocument (OPEN-516: Pennsylvania's printing with struck-out words left
+        out; its older PDFs stay stored), then PDF, then anything else, last source_url within
+        a type (OPEN-317, OPEN-369). Search indexes the same choice (OPEN-533). Whitespace-only
+        text does not count as text (OPEN-365). Every request, and every instance replicating
+        the table, picks the same row."""
         if not version.links:
             return None
 
@@ -118,24 +109,16 @@ class BillPagination(Pagination):
             )
             .all()
         )
-        # Sorted here, in Python, not by the database: the archiver orders links by Python's
-        # string comparison, and a database collation can order URLs differently. The IN filter above
-        # excludes a NULL source_url and the table is unique per (bill, note, date, url), so every
-        # row here has a comparable URL and no two rows tie.
-        archived.sort(key=lambda row: row.source_url)
-        by_media_type = {}
-        for row in archived:
-            # OPEN-365: whitespace-only text (an image-only PDF) is not text. A blank PDF used to
-            # win here over the same version's HTML, so LegBot was handed the blank.
-            if row.raw_text and row.raw_text.strip():
-                by_media_type[row.media_type] = row
-        if not by_media_type:
-            return None
-        return (
-            by_media_type.get("text/xml")
-            or by_media_type.get("application/vnd.oasis.opendocument.text")
-            or by_media_type.get("application/pdf")
-            or next(iter(by_media_type.values()))
+        # URLs are compared in Python (inside preferred_document), not by the database: the
+        # archiver orders links by Python's string comparison, and a database collation can order
+        # URLs differently. The IN filter above excludes a NULL source_url and the table is unique
+        # per (bill, note, date, url), so every row here has a comparable URL and no two rows tie.
+        # OPEN-365: whitespace-only text (an image-only PDF) is not text. A blank PDF used to win
+        # here over the same version's HTML, so LegBot was handed the blank.
+        return preferred_document(
+            [row for row in archived if row.raw_text and row.raw_text.strip()],
+            media_type=lambda row: row.media_type,
+            source_url=lambda row: row.source_url,
         )
 
     @classmethod
