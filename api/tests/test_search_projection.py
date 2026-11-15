@@ -721,6 +721,101 @@ def test_pick_current_docs_prefers_pdf_within_one_version():
     assert sp.pick_current_docs(docs[::-1]) == {"b": 1}
 
 
+ODT = "application/vnd.oasis.opendocument.text"
+
+
+def _doc_at(i, media, url, note="Printer's No. PN3751", bill="b"):
+    return (i, bill, note, "", media, 10, url)
+
+
+def test_pick_current_docs_prefers_opendocument_over_pdf_whatever_the_url_or_id_order():
+    """OPEN-533: Pennsylvania's OpenDocument printing (struck-out words left out) wins over the
+    PDF of the same version, as on the bill page, even when the PDF has the later URL and id."""
+    docs = [
+        _doc_at(1, ODT, "https://x.test/a-odt"),
+        _doc_at(2, "application/pdf", "https://x.test/z-pdf"),
+    ]
+    assert sp.pick_current_docs(docs) == {"b": 1}
+    assert sp.pick_current_docs(docs[::-1]) == {"b": 1}
+
+
+def test_pick_current_docs_prefers_xml_over_opendocument_and_pdf():
+    docs = [
+        _doc_at(1, "text/xml", "https://x.test/a-xml"),
+        _doc_at(2, ODT, "https://x.test/m-odt"),
+        _doc_at(3, "application/pdf", "https://x.test/z-pdf"),
+    ]
+    assert sp.pick_current_docs(docs) == {"b": 1}
+    assert sp.pick_current_docs(docs[::-1]) == {"b": 1}
+    xml_and_pdf = [docs[0], docs[2]]
+    assert sp.pick_current_docs(xml_and_pdf) == {"b": 1}
+    assert sp.pick_current_docs(xml_and_pdf[::-1]) == {"b": 1}
+
+
+def test_pick_current_docs_one_format_version_takes_the_last_url_as_the_bill_page_does():
+    """A version with one format is unchanged by the media-type rule; two documents of that type
+    resolve to the last URL, the row the bill page shows (OPEN-369), not the highest id."""
+    assert sp.pick_current_docs(
+        [_doc_at(7, "application/pdf", "https://x.test/p")]
+    ) == {"b": 7}
+    docs = [
+        _doc_at(1, "application/pdf", "https://x.test/z-later"),
+        _doc_at(2, "application/pdf", "https://x.test/a-earlier"),
+    ]
+    assert sp.pick_current_docs(docs) == {"b": 1}
+    assert sp.pick_current_docs(docs[::-1]) == {"b": 1}
+
+
+def test_pick_current_docs_still_takes_the_current_version_before_the_format():
+    """The version comes first: an older version's XML never beats the current version's PDF."""
+    docs = [
+        _doc_at(1, "text/xml", "https://x.test/1", note="Printer's No. PN3586"),
+        _doc_at(2, "application/pdf", "https://x.test/2", note="Printer's No. PN3751"),
+    ]
+    assert sp.pick_current_docs(docs) == {"b": 2}
+    assert sp.pick_current_docs(docs[::-1]) == {"b": 2}
+
+
+def test_search_and_bill_page_share_one_document_rule():
+    """OPEN-533: no second ranking. Both import the same function."""
+    from api import bills, document_choice
+
+    assert sp.preferred_document is document_choice.preferred_document
+    assert bills.preferred_document is document_choice.preferred_document
+
+
+def test_struck_out_words_in_the_pdf_are_not_searchable_once_opendocument_exists(world):
+    """OPEN-533, HB 2625 PN3751 shape: the PDF still carries the struck-out definition, the
+    OpenDocument printing leaves it out. Search indexes the OpenDocument text."""
+    b = add_bill(world, 1)
+    add_doc(
+        world, b, "precondition permission engage act racing", media="application/pdf"
+    )
+    add_doc(world, b, "racing license care horses", media=ODT)
+    refresh()
+    assert search_ids("precondition") == []
+    assert search_ids("horses") == [b.id]
+
+
+def test_xml_text_is_indexed_over_the_same_versions_pdf(world):
+    b = add_bill(world, 1)
+    add_doc(world, b, "pagenumber debris", media="application/pdf")
+    add_doc(world, b, "clean xml wording", media="text/xml")
+    refresh()
+    assert search_ids("debris") == []
+    assert search_ids("wording") == [b.id]
+
+
+def test_whitespace_only_xml_does_not_take_the_place_of_the_pdf(world):
+    """The bill page skips whitespace-only text (OPEN-365); search skips it too, so it indexes the
+    PDF the bill page shows rather than a blank XML row."""
+    b = add_bill(world, 1)
+    add_doc(world, b, "pdfonly wording", media="application/pdf")
+    add_doc(world, b, " \n\t ", media="text/xml")
+    refresh()
+    assert search_ids("pdfonly") == [b.id]
+
+
 def test_pick_current_docs_ignores_unclassifiable_notes():
     assert sp.STAGE_UNKNOWN == sp.note_stage("zzz unrecognised")[0]
     docs = [

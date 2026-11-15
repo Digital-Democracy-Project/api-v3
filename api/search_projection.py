@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .bill_version_flag import flag_column_present
+from .document_choice import preferred_document
 from .version_ordering import (
     STAGE_UNKNOWN,
     note_stage,
@@ -171,8 +172,10 @@ _DOCS_SQL = """
            char_length(d.raw_text) AS n_chars, d.source_url, b.identifier
     FROM ddp_bill_version_document d
     JOIN opencivicdata_bill b ON b.id = d.bill_id
-    WHERE d.bill_id = ANY(:bill_ids) AND NOT d.is_error AND coalesce(d.raw_text, '') <> ''
+    WHERE d.bill_id = ANY(:bill_ids) AND NOT d.is_error AND d.raw_text ~ '[^[:space:]]'
 """
+# Whitespace-only text is not text (OPEN-365), the bill page's test too, so a blank row of a preferred
+# format never takes the index's place from the format the bill page shows (OPEN-533).
 DOCS_SQL = text(_DOCS_SQL)
 # OPEN-422: the archiver's own answer (NULL = not decided yet, so it stays a candidate), used only
 # when the database has the column (api/bill_version_flag.py). Same rule as the bill detail: a
@@ -294,11 +297,12 @@ def ensure_schema(conn: Connection) -> None:
 def pick_current_docs(rows) -> Dict[str, int]:
     """bill_id -> id of the current version's archived document.
 
-    Same rule as BillPagination.postprocess_includes: drop STAGE_UNKNOWN notes, order by
-    version_sort_key (never DB row order or BillVersion.date, blank for most jurisdictions), take
-    the last; within one version prefer the PDF, matching archive_bill_versions()'s diff lineage.
+    The version: same rule as BillPagination.postprocess_includes -- drop STAGE_UNKNOWN notes, order
+    by version_sort_key (never DB row order or BillVersion.date, blank for most jurisdictions), take
+    the last. The document within it: document_choice.preferred_document(), the bill page's own rule
+    (XML, then OpenDocument, then PDF, then anything else; OPEN-533), so search indexes the text the
+    bill page shows -- for Pennsylvania the OpenDocument printing, struck-out words left out.
     """
-    by_bill: Dict[str, list] = {}
     # A version's number comes from all of its documents (the PDF carries it, an HTML twin may
     # not), so both documents of one version sort alike. Rows without a URL column (tests) have none.
     urls_by_version: Dict[tuple, list] = {}
@@ -309,27 +313,34 @@ def pick_current_docs(rows) -> Dict[str, int]:
         )
         if len(rest) > 1:
             origin_by_bill[bill_id] = origin_chamber(rest[1])
-    for doc_id, bill_id, note, date, media_type, _n_chars, *_rest in rows:
+    docs_by_version: Dict[tuple, list] = {}
+    for doc_id, bill_id, note, date, media_type, _n_chars, *rest in rows:
         if note_stage(note or "")[0] == STAGE_UNKNOWN:
             continue
-        by_bill.setdefault(bill_id, []).append(
-            (doc_id, note or "", date or "", media_type)
+        docs_by_version.setdefault((bill_id, note or "", date or ""), []).append(
+            (doc_id, media_type, rest[0] if rest else None)
         )
+    current: Dict[str, tuple] = {}
+    for version, docs in docs_by_version.items():
+        bill_id, note, date = version
+        # Two versions that tie on the sort key resolve to the one holding the newest document,
+        # so the answer never depends on row order.
+        rank = (
+            version_sort_key(
+                note, date, urls_by_version[version], origin_by_bill.get(bill_id)
+            ),
+            max(d[0] for d in docs),
+        )
+        if bill_id not in current or rank > current[bill_id][0]:
+            current[bill_id] = (rank, docs)
     picks: Dict[str, int] = {}
-    for bill_id, docs in by_bill.items():
-        docs.sort(
-            key=lambda d: (
-                version_sort_key(
-                    d[1],
-                    d[2],
-                    urls_by_version[(bill_id, d[1], d[2])],
-                    origin_by_bill.get(bill_id),
-                ),
-                d[3] == "application/pdf",
-                d[0],
-            )
-        )
-        picks[bill_id] = docs[-1][0]
+    for bill_id, (_rank, docs) in current.items():
+        # Sorted by id first: preferred_document's URL sort is stable, so rows without a URL
+        # (tests) resolve to the highest id within a media type.
+        docs.sort(key=lambda d: d[0])
+        picks[bill_id] = preferred_document(
+            docs, media_type=lambda d: d[1], source_url=lambda d: d[2] or ""
+        )[0]
     return picks
 
 
