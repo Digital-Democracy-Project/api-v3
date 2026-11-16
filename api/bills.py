@@ -6,15 +6,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import func, desc, nullslast
 from sqlalchemy.orm import contains_eager, object_session
 from openstates.utils.transformers import fix_bill_id
-from .db import SessionLocal, get_db, models
-from .schemas import Bill
-from .pagination import Pagination
-from .auth import apikey_auth
-from .utils import jurisdiction_filter
-from .bill_version_flag import flag_column_present
-from .bill_types import is_bill_type_clause
-from .document_choice import preferred_document
-from .version_ordering import (
+from openstates.utils.version_ordering import (
     STAGE_AMENDMENT,
     STAGE_CHAMBER_PASSAGE,
     STAGE_ENACTED,
@@ -25,6 +17,14 @@ from .version_ordering import (
     origin_chamber,
     version_sort_key,
 )
+from .db import SessionLocal, get_db, models
+from .schemas import Bill
+from .pagination import Pagination
+from .auth import apikey_auth
+from .utils import jurisdiction_filter
+from .bill_version_flag import flag_column_present
+from .bill_types import is_bill_type_clause
+from .document_choice import preferred_document
 
 # DDP: stable, human-readable names for version_ordering's numeric stages, exposed as
 # `version_stage` so consumers (ddp-sync's knowledge-base embedding hook) carry the
@@ -200,9 +200,9 @@ class BillPagination(Pagination):
         # BillVersion.date is blank 100% of the time outside US federal, so it degrades to a
         # pure alphabetical note-string sort, which has no relationship to real chronology
         # (e.g. "Enrolled" < "Introduced" alphabetically, but Enrolled is the later stage).
-        # version_ordering.py here is a deliberate, explicitly-synced copy of
-        # openstates-core's own implementation -- see that module's own docstring for why
-        # this isn't a real import (yet).
+        # OPEN-538: these rules are imported from DDP's openstates-core fork
+        # (openstates.utils.version_ordering), the same module the archiver and
+        # recompute-diff-order use; api-v3 keeps no copy (see ddp-openstates-core.txt).
         #
         # A version whose note doesn't match any known stage (STAGE_UNKNOWN) is excluded from
         # latest/previous selection entirely, matching openstates-core's own

@@ -11,7 +11,7 @@ from contextlib import contextmanager
 import pytest
 
 from api.db.models import Bill, BillVersion, BillVersionDocument, BillVersionLink
-from api.version_ordering import (
+from openstates.utils.version_ordering import (
     STAGE_AMENDMENT,
     STAGE_CHAMBER_PASSAGE,
     STAGE_ENACTED,
