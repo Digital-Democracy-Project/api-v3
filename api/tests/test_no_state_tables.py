@@ -15,10 +15,15 @@ below with its reason, by file and symbol, never by state: an entry cannot hold 
 phase 1 retires that code; the last test fails while an entry outlives its code. An entry covers its whole symbol:
 a new state added inside an allowed table or function is not caught, so keep entries few and retire them.
 
-Of the plan's A.4 rows only one is such a table today (Alabama's date-first ordering); the rest are rules keyed by
-the shape of a note, a URL or a document type, with no state literal in the code, so this guard cannot see them and
-needs no entry for them; the plan tracks them. A comparison against a two-letter word that is not a state
-(`order == "id"`) is caught too: give it an entry that says so.
+None of the plan's A.4 rows is such a table today: the one that was (Alabama's date-first ordering in
+api/version_ordering.py) went with OPEN-538, and the rest are rules keyed by the shape of a note, a URL or a document
+type, with no state literal in the code, so this guard cannot see them and needs no entry for them; the plan tracks
+them. A comparison against a two-letter word that is not a state (`order == "id"`) is caught too: give it an entry
+that says so.
+
+Not caught, by design or for now: a table built inside a function; a table naming a single state (`{"pa": 1}`);
+`startswith("pa")` and other string tests; lookups such as `rules["pa"]`; a state hidden behind a named constant
+(`PA = "pa"; x == PA`); and per-state rules kept as database rows rather than code.
 """
 
 import ast
@@ -47,12 +52,9 @@ OCD_ID = re.compile(
 )
 
 # (path from the repo root, table name): why it is allowed. Retire the entry with the code (phase 1).
-ALLOWED_TABLES = {
-    ("api/version_ordering.py", "_DATE_ORDERED_JURISDICTIONS"): (
-        "plan A.4 row 1: the synced copy of openstates-core's version rules (OPEN-569 date-first ordering); goes when "
-        "api-v3 imports core's version_ordering or reads a stored stage (phase 1, OPEN-538)"
-    ),
-}
+# Empty since OPEN-538: api/version_ordering.py (Alabama's date-first table, plan A.4 row 1) was deleted when api-v3
+# started importing openstates-core's version rules.
+ALLOWED_TABLES = {}
 
 # (path from the repo root, enclosing function, or "<module>"): why its comparisons against a state literal are
 # allowed. Retire the entry with the code (phase 1).
