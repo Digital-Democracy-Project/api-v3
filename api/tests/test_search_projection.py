@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
-from api import search_projection as sp
+from api import bills, search_projection as sp
 from api.bill_version_flag import forget_check
 from api.db.models import (
     Bill,
@@ -664,6 +664,65 @@ def test_pick_current_docs_orders_arizona_action_documents_by_document_number():
     ]
     assert sp.pick_current_docs(docs) == {"b": 1}
     assert sp.pick_current_docs(docs[::-1]) == {"b": 1}
+
+
+def test_pick_current_docs_orders_alabama_by_date_like_the_bill_page():
+    """OPEN-577: core orders Alabama's versions by date first (OPEN-569). Search ranks with the
+    jurisdiction's name, as the bill page does, so a substitute dated after Engrossed is the current
+    document in Alabama, while a stage-first state still takes Engrossed. HB 315's notes and dates."""
+    versions = [
+        ("Introduced", "2026-01-22"),
+        ("Engrossed", "2026-03-17"),
+        ("Jefferson County Legislation 1st Substitute", "2026-04-02"),
+    ]
+
+    def rows(state):
+        return [
+            (
+                i,
+                "b",
+                note,
+                date,
+                "application/pdf",
+                10,
+                f"https://x/{i}.pdf",
+                "HB 315",
+                state,
+            )
+            for i, (note, date) in enumerate(versions, start=1)
+        ]
+
+    def bill_page_latest(state):
+        def key(version):
+            return bills.version_sort_key(version[0], version[1], (), "lower", state)
+
+        return versions.index(sorted(versions, key=key)[-1]) + 1
+
+    for state in ("Alabama", "Ohio"):
+        assert sp.pick_current_docs(rows(state)) == {"b": bill_page_latest(state)}
+        assert sp.pick_current_docs(rows(state)[::-1]) == {"b": bill_page_latest(state)}
+    assert bill_page_latest("Alabama") == 3  # the substitute
+    assert bill_page_latest("Ohio") == 2  # Engrossed
+
+
+def test_refresh_ranks_with_the_jurisdictions_name(world, monkeypatch):
+    """OPEN-577: a real refresh hands version_sort_key the bill's jurisdiction name (DOCS_SQL's
+    ninth column), the same argument the bill page passes."""
+    db = TestingSessionLocal()
+    b = add_bill(db, 577)
+    add_doc(db, b, "newts and salamanders")
+    db.close()
+    seen = []
+
+    def key(*args):
+        seen.append(args)
+        return real_key(*args)
+
+    real_key = sp.version_sort_key
+    monkeypatch.setattr(sp, "version_sort_key", key)
+    refresh()
+    assert seen
+    assert {args[4] for args in seen} == {"Alaska"}
 
 
 def test_pick_current_docs_places_arizona_engrossed_by_the_bills_origin_chamber():
