@@ -28,4 +28,10 @@ RUN poetry install --no-root --only main \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
+# DDP (OPEN-538): the bill-version rules come from DDP's openstates-core fork, pinned in
+# ddp-openstates-core.txt (see that file for why the flags are needed).
+COPY ddp-openstates-core.txt /app/
+RUN pip3 install --disable-pip-version-check --no-cache-dir --no-deps --ignore-requires-python \
+    -r ddp-openstates-core.txt
+
 COPY . /app

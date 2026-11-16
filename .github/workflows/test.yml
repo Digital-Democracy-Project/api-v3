@@ -51,6 +51,8 @@ jobs:
     - name: install dependencies
       run: poetry install --no-root
       # if: steps.cache.outputs.cache-hit != 'true'
+    - name: install DDP openstates-core (OPEN-538, see ddp-openstates-core.txt)
+      run: poetry run pip install --no-deps --ignore-requires-python -r ddp-openstates-core.txt
     - name: lint with black
       run: poetry run black --diff --check .
     - name: lint with flake8
