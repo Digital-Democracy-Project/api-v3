@@ -354,6 +354,56 @@ class BillDocumentOrVersion(BaseModel):
             "raw_text (see postprocess_includes). Absent on classifiable versions."
         ),
     )
+    current_document_id: Optional[int] = Field(
+        None,
+        example=62651,
+        description=(
+            "DDP (OPEN-540): the archived document this version is read from: among its archived "
+            "documents with text, XML, then OpenDocument, then PDF, then anything else (the bill "
+            "page's rule, which search also uses). Null when none has text. Same value as "
+            "`archived_document_id`. Single-bill detail with include=versions only."
+        ),
+    )
+    is_bill_version: Optional[bool] = Field(
+        None,
+        example=True,
+        description=(
+            "DDP (OPEN-540): the archiver's stored answer for this version's document: true for a "
+            "real bill version, false for a procedural paper (a committee amendment list, a "
+            "comparison sheet). Null when not decided yet or no archived document. Single-bill "
+            "detail with include=versions only."
+        ),
+    )
+    is_full_text: Optional[bool] = Field(
+        None,
+        example=True,
+        description=(
+            "DDP (OPEN-540): true for a real bill version whose archived text was extracted: one "
+            "placed in the sequence (known stage, not marked a procedural paper), or one whose name "
+            "cannot be placed but the archiver stored as a bill version. False otherwise. Single-bill "
+            "detail with include=versions only."
+        ),
+    )
+    diff_baseline_id: Optional[int] = Field(
+        None,
+        example=62650,
+        description=(
+            "DDP (OPEN-540): the archived document `diff_from_previous_version` was actually "
+            "computed against, stored by the archiver (OPEN-539). Null when there is no stored "
+            "comparison, or the state's comparisons are not stamped yet. Single-bill detail with "
+            "include=versions only."
+        ),
+    )
+    version_date: Optional[str] = Field(
+        None,
+        example="2026-03-17",
+        description=(
+            "DDP (OPEN-540): the state's own date for this version, or null when the state "
+            "publishes none (never guessed; `date` keeps returning an empty string). Order by "
+            "the order `versions` is returned in, not by this date. Single-bill detail with "
+            "include=versions only."
+        ),
+    )
     diff_from_previous_version: Optional[str] = Field(
         None,
         example="--- a\n+++ b\n@@ -1 +1 @@\n-old text\n+new text",
