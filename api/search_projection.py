@@ -169,9 +169,11 @@ STALE_COUNT_SQL = text("SELECT count(*) " + _STALE_FROM_WHERE)
 
 _DOCS_SQL = """
     SELECT d.id, d.bill_id, d.version_note, d.version_date, d.media_type,
-           char_length(d.raw_text) AS n_chars, d.source_url, b.identifier
+           char_length(d.raw_text) AS n_chars, d.source_url, b.identifier, j.name
     FROM ddp_bill_version_document d
     JOIN opencivicdata_bill b ON b.id = d.bill_id
+    JOIN opencivicdata_legislativesession sess ON sess.id = b.legislative_session_id
+    JOIN opencivicdata_jurisdiction j ON j.id = sess.jurisdiction_id
     WHERE d.bill_id = ANY(:bill_ids) AND NOT d.is_error AND d.raw_text ~ '[^[:space:]]'
 """
 # Whitespace-only text is not text (OPEN-365), the bill page's test too, so a blank row of a preferred
@@ -305,14 +307,19 @@ def pick_current_docs(rows) -> Dict[str, int]:
     """
     # A version's number comes from all of its documents (the PDF carries it, an HTML twin may
     # not), so both documents of one version sort alike. Rows without a URL column (tests) have none.
+    # OPEN-577: the jurisdiction's name (the ninth column) goes to version_sort_key as the bill page
+    # passes it, so a state core orders by date first (Alabama, OPEN-569) is ranked alike here.
     urls_by_version: Dict[tuple, list] = {}
     origin_by_bill: Dict[str, Optional[str]] = {}
+    jurisdiction_by_bill: Dict[str, Optional[str]] = {}
     for doc_id, bill_id, note, date, media_type, _n_chars, *rest in rows:
         urls_by_version.setdefault((bill_id, note or "", date or ""), []).append(
             rest[0] if rest else None
         )
         if len(rest) > 1:
             origin_by_bill[bill_id] = origin_chamber(rest[1])
+        if len(rest) > 2:
+            jurisdiction_by_bill[bill_id] = rest[2]
     docs_by_version: Dict[tuple, list] = {}
     for doc_id, bill_id, note, date, media_type, _n_chars, *rest in rows:
         if note_stage(note or "")[0] == STAGE_UNKNOWN:
@@ -327,7 +334,11 @@ def pick_current_docs(rows) -> Dict[str, int]:
         # so the answer never depends on row order.
         rank = (
             version_sort_key(
-                note, date, urls_by_version[version], origin_by_bill.get(bill_id)
+                note,
+                date,
+                urls_by_version[version],
+                origin_by_bill.get(bill_id),
+                jurisdiction_by_bill.get(bill_id),
             ),
             max(d[0] for d in docs),
         )
