@@ -127,7 +127,9 @@ def test_an_amendment_paper_is_a_known_label_and_not_a_bill_type(papers, client)
     ids, _ = _bill_list(client, bill_types_only="true")
     assert PETITION not in ids
     ids, _ = _bill_list(client)
-    assert PETITION in ids  # still there for a caller that does not ask, and by direct link
+    assert (
+        PETITION in ids
+    )  # still there for a caller that does not ask, and by direct link
 
 
 # --- GET /bills -----------------------------------------------------------------------------------
