@@ -223,6 +223,11 @@ class BillVersionDocument(Base):
     # by a core migration, and the Mac's replica (logical replication carries rows, not schema
     # changes) may not have it for a while. Read it only through api/bill_version_flag.py.
     is_bill_version = deferred(Column(Boolean))
+    # OPEN-539/OPEN-540: the archived document (ddp_bill_version_document.id) that
+    # diff_from_previous_version was actually computed against, written by the archiver and by
+    # recompute-diff-order. NULL where there is no stored comparison, and on rows not stamped yet.
+    # Deferred and read only through api/bill_version_flag.py, for the same reason as above.
+    diff_baseline_id = deferred(Column(Integer))
     # SYNC-65: mapped so /bills?document_updated_since= can filter on it directly -- this
     # column already exists on the underlying table (Django's own auto_now=True field), just
     # wasn't mapped here since nothing previously needed to query it.

@@ -22,7 +22,7 @@ from .schemas import Bill
 from .pagination import Pagination
 from .auth import apikey_auth
 from .utils import jurisdiction_filter
-from .bill_version_flag import flag_column_present
+from .bill_version_flag import baseline_column_present, flag_column_present
 from .bill_types import is_bill_type_clause
 from .document_choice import preferred_document
 
@@ -147,28 +147,47 @@ class BillPagination(Pagination):
         return chosen
 
     @classmethod
-    def _flagged_not_a_version(cls, db, data):
-        """OPEN-422: {(note, date)} of this bill's versions whose archived documents the
-        archiver flagged is_bill_version = False (a procedural paper, not a bill version).
-        Empty when the database does not have the column yet, and for NULL (not decided).
-        The archiver derives the flag from the note, so every saved format of a version
-        carries the same answer; one query per bill, not one per version."""
-        if not flag_column_present(db):
-            return set()
-        rows = (
-            db.query(
-                models.BillVersionDocument.version_note,
-                models.BillVersionDocument.version_date,
-            )
-            .filter(
-                models.BillVersionDocument.bill_id == data.id,
-                models.BillVersionDocument.is_bill_version.is_(False),
-                models.BillVersionDocument.is_error.is_(False),
-            )
-            .distinct()
-            .all()
+    def _stored_version_values(cls, db, data):
+        """OPEN-540: the values the archiver stores per document, for this bill, in one query:
+        ({archived document id: (is_bill_version, diff_baseline_id)}, flagged).
+        `flagged` (OPEN-422): {(note, date)} of versions with a document the archiver flagged
+        is_bill_version = False (a procedural paper, not a bill version); NULL (not decided) and a
+        database without the column flag nothing. The archiver derives the flag from the note, so
+        every saved format of a version carries the same answer. Both come from the same rows so a
+        detail request still costs one query here (test_bills counts them). A column the database does not
+        have yet reads as None (api/bill_version_flag.py); neither present means no query."""
+        flag = flag_column_present(db)
+        baseline = baseline_column_present(db)
+        if not flag and not baseline:
+            return {}, set()
+        doc = models.BillVersionDocument
+        columns = [doc.id, doc.version_note, doc.version_date, doc.is_error]
+        if flag:
+            columns.append(doc.is_bill_version)
+        if baseline:
+            columns.append(doc.diff_baseline_id)
+        values, flagged = {}, set()
+        for row in db.query(*columns).filter(doc.bill_id == data.id):
+            doc_id, note, date, is_error, *rest = row
+            is_bill_version = rest.pop(0) if flag else None
+            values[doc_id] = (is_bill_version, rest.pop(0) if baseline else None)
+            if is_bill_version is False and is_error is False:
+                flagged.add((note, date))
+        return values, flagged
+
+    @staticmethod
+    def _set_clean_fields(version_obj, version, row, placed, stored):
+        """OPEN-540 (PLAN-state-specific-handling §4.4, C5): the clean-data fields, added beside the
+        existing ones. `row` is the archived document the version is read from (_archived_row_for),
+        `placed` whether the version takes part in latest/previous (known stage, not flagged)."""
+        version_obj.current_document_id = row.id if row is not None else None
+        is_bill_version, baseline = (
+            stored.get(row.id, (None, None)) if row is not None else (None, None)
         )
-        return {(note, date) for note, date in rows}
+        version_obj.is_bill_version = is_bill_version
+        version_obj.diff_baseline_id = baseline
+        version_obj.is_full_text = placed and row is not None
+        version_obj.version_date = version.date or None
 
     @classmethod
     def postprocess_includes(cls, obj, data, includes, *, detail=False):
@@ -184,7 +203,7 @@ class BillPagination(Pagination):
             return
 
         db = object_session(data)
-        flagged = cls._flagged_not_a_version(db, data)
+        stored, flagged = cls._stored_version_values(db, data)
 
         def unplaced(version):
             # A note the stage classifier cannot place, or a document the archiver flagged as
@@ -220,6 +239,7 @@ class BillPagination(Pagination):
             version_obj = obj.versions[list(data.versions).index(version)]
             version_obj.version_stage = STAGE_LABELS[STAGE_UNKNOWN]
             row = cls._archived_row_for(db, data, version)
+            cls._set_clean_fields(version_obj, version, row, False, stored)
             if row is not None:
                 version_obj.archived_document_id = row.id
                 version_obj.archived_updated_at = row.updated_at
@@ -249,10 +269,11 @@ class BillPagination(Pagination):
         # this widens the bound from "2 versions" to "this bill's own version count", it
         # doesn't remove the bound (the paginated /bills list is untouched, see below).
         for ordinal, version in enumerate(ordered):
-            cls._attach_archived_document(db, data, obj, version)
+            row = cls._attach_archived_document(db, data, obj, version)
             # DDP: the classifier's own stage and this version's position in the order it
             # just produced, so consumers never re-derive either (classifiable versions only).
             version_obj = obj.versions[list(data.versions).index(version)]
+            cls._set_clean_fields(version_obj, version, row, True, stored)
             version_obj.version_stage = STAGE_LABELS[note_stage(version.note)[0]]
             version_obj.version_ordinal = ordinal
 
