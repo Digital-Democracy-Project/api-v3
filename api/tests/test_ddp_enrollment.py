@@ -230,7 +230,8 @@ def test_the_route_is_in_the_openapi_schema(client):
     [
         {"newest_first": True},
         {"newest_first": False},
-        {"newest_first": "yes"},  # a wrong shape is ignored too: the block is not read at all
+        # a wrong shape is ignored too: the block is not read at all
+        {"newest_first": "yes"},
         {},
         "not a block",
     ],
