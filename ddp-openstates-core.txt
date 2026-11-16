@@ -12,4 +12,4 @@
 #
 # To take a newer rule from core: change the commit below (a full SHA on the fork's main), then
 # run the api-v3 suite and rebuild both api-v3 copies (Mac :8002 and EC2).
-openstates @ https://github.com/Digital-Democracy-Project/openstates-core/archive/96445eb26d7d4c59c592dadc0261c47d985e6d46.tar.gz
+openstates @ https://github.com/Digital-Democracy-Project/openstates-core/archive/bcde78e2ce977e1783a77484a2d78344404a5f5e.tar.gz
