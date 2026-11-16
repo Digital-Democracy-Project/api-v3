@@ -234,6 +234,7 @@ class BillPagination(Pagination):
                 v.date,
                 [link.url for link in v.links],
                 origin_chamber(data.identifier),
+                data.legislative_session.jurisdiction.name,
             ),
         )
 
