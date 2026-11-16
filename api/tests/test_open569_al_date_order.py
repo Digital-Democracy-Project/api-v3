@@ -1,11 +1,10 @@
-"""OPEN-569: Alabama versions are ordered by date (the copy of openstates-core's rule; see
-api/version_ordering.py). The notes and dates are HB 315's (2026RS) as the OPEN-569 Alabama scraper
-dates them."""
+"""OPEN-569: Alabama versions are ordered by date (openstates-core's rule, imported since
+OPEN-538). The notes and dates are HB 315's (2026RS) as the OPEN-569 Alabama scraper dates them."""
 
 from unittest import mock
 
 from api import bills
-from api.version_ordering import version_sort_key
+from openstates.utils.version_ordering import version_sort_key
 
 HB315 = [
     ("Introduced", "2026-01-22"),

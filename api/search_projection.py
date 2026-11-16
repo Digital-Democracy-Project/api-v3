@@ -24,7 +24,7 @@ from sqlalchemy.engine import Connection
 
 from .bill_version_flag import flag_column_present
 from .document_choice import preferred_document
-from .version_ordering import (
+from openstates.utils.version_ordering import (
     STAGE_UNKNOWN,
     note_stage,
     origin_chamber,
