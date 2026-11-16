@@ -186,7 +186,12 @@ class BillPagination(Pagination):
         )
         version_obj.is_bill_version = is_bill_version
         version_obj.diff_baseline_id = baseline
-        version_obj.is_full_text = placed and row is not None
+        # A real bill version with extracted text (§4.4). Real: placed in the sequence, or a version
+        # whose name core cannot place but the archiver stored as a bill version (Ramon, 2026-11-16:
+        # "Count them as full text"). An undecided (NULL) unplaced version is not counted.
+        version_obj.is_full_text = row is not None and (
+            placed or is_bill_version is True
+        )
         version_obj.version_date = version.date or None
 
     @classmethod

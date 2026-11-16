@@ -178,6 +178,63 @@ def test_a_version_with_only_blank_text_is_not_full_text(client):
         assert v[INTRODUCED]["is_full_text"] is True
 
 
+def test_an_unplaced_version_the_archiver_calls_real_is_full_text(client):
+    """Ramon, 2026-11-16: a real bill version whose name core cannot place (North Carolina's
+    'A1: ACI-6-V-10', Arizona's 'Transmitted to Secretary of State') is full text when the
+    archiver stored it as a bill version. It still never becomes latest. An undecided (NULL)
+    unplaced version is not counted."""
+    versions = [
+        (INTRODUCED, [("https://example.com/i.pdf", "application/pdf", BODY + "i")]),
+        (UNKNOWN_NOTE, [("https://example.com/f.pdf", "application/pdf", BODY + "f")]),
+        ("Transmitted", [("https://example.com/t.pdf", "application/pdf", BODY + "t")]),
+    ]
+    with _temp_bill("HB 9545", versions) as bill_id:
+        _store(bill_id, UNKNOWN_NOTE, is_bill_version=True)
+        listed = _get(client, bill_id)
+        v = _by_note(listed)
+        assert v[UNKNOWN_NOTE]["version_stage"] == "unknown"
+        assert v[UNKNOWN_NOTE]["is_bill_version"] is True
+        assert v[UNKNOWN_NOTE]["is_full_text"] is True
+        assert v["Transmitted"]["version_stage"] == "unknown"
+        assert v["Transmitted"]["is_full_text"] is False  # NULL: not decided
+        assert listed[-1]["note"] == INTRODUCED  # placement still decides latest
+
+
+def test_an_errored_flagged_document_does_not_unplace_its_version(client):
+    """OPEN-422's flagged set ignores documents that failed (is_error): a version whose only
+    flagged document errored keeps its place, and its other format is its text."""
+    versions = [
+        (INTRODUCED, [("https://example.com/i.pdf", "application/pdf", BODY + "i")]),
+        (
+            ENGROSSED,
+            [
+                ("https://example.com/e.pdf", "application/pdf", BODY + "pdf"),
+                ("https://example.com/e.html", "text/html", BODY + "html"),
+            ],
+        ),
+    ]
+    with _temp_bill("HB 9546", versions) as bill_id:
+        db = TestingSessionLocal()
+        try:
+            db.query(BillVersionDocument).filter(
+                BillVersionDocument.bill_id == bill_id,
+                BillVersionDocument.source_url == "https://example.com/e.pdf",
+            ).update(
+                {
+                    BillVersionDocument.is_bill_version: False,
+                    BillVersionDocument.is_error: True,
+                }
+            )
+            db.commit()
+        finally:
+            db.close()
+        listed = _get(client, bill_id)
+        engrossed = _by_note(listed)[ENGROSSED]
+        assert engrossed["version_stage"] == "chamber_passage"
+        assert engrossed["is_full_text"] is True
+        assert listed[-1]["note"] == ENGROSSED
+
+
 def test_list_endpoint_carries_no_clean_fields(client):
     response = client.get("/bills?jurisdiction=oh&session=2021&include=versions")
     assert response.status_code == 200

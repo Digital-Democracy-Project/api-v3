@@ -378,9 +378,10 @@ class BillDocumentOrVersion(BaseModel):
         None,
         example=True,
         description=(
-            "DDP (OPEN-540): true for a real bill version (its stage is known and the archiver did "
-            "not mark it a procedural paper) whose archived text was extracted; false otherwise. "
-            "Single-bill detail with include=versions only."
+            "DDP (OPEN-540): true for a real bill version whose archived text was extracted: one "
+            "placed in the sequence (known stage, not marked a procedural paper), or one whose name "
+            "cannot be placed but the archiver stored as a bill version. False otherwise. Single-bill "
+            "detail with include=versions only."
         ),
     )
     diff_baseline_id: Optional[int] = Field(
