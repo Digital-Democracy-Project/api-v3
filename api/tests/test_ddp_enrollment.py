@@ -222,26 +222,26 @@ def test_the_route_is_in_the_openapi_schema(client):
     assert URL in client.get("/openapi.json").json()["paths"]
 
 
-# --- BROKER-368: the actions block; BROKER-482/494: nothing Voatz -------------------------------------------------
+# --- OPEN-544: no actions block; BROKER-482/494: nothing Voatz ----------------------------------------------------
 
 
-def _with_blocks(entry, newest_first=False):
-    entry["actions"] = {"newest_first": newest_first}
-    return entry
-
-
-def test_actions_is_served_as_the_manifest_states_it(client, tmp_path, monkeypatch):
-    served = _serve(
-        client,
-        tmp_path,
-        monkeypatch,
-        {
-            "us": _with_blocks(_entry(tier=None), newest_first=True),
-            "pa": _with_blocks(_entry(tier=None)),
-        },
-    )
-    assert served["us"]["actions"] == {"newest_first": True}
-    assert served["pa"] == {**EXPECTED_PA, "actions": {"newest_first": False}}
+@pytest.mark.parametrize(
+    "actions",
+    [
+        {"newest_first": True},
+        {"newest_first": False},
+        {"newest_first": "yes"},  # a wrong shape is ignored too: the block is not read at all
+        {},
+        "not a block",
+    ],
+)
+def test_a_stray_actions_block_is_never_served(client, tmp_path, monkeypatch, actions):
+    """OPEN-544: `actions.newest_first` is gone from the manifest and the broker no longer reads it. A block left in an
+    older copy of the manifest on a host is ignored whatever it holds: no key in the answer, and never a 503."""
+    entry = _entry(tier=None)
+    entry["actions"] = actions
+    served = _serve(client, tmp_path, monkeypatch, {"pa": entry})
+    assert served == {"pa": EXPECTED_PA}
 
 
 @pytest.mark.parametrize(
@@ -260,7 +260,7 @@ def test_a_voatz_block_in_the_manifest_is_never_served(
     """BROKER-494: api-v3 serves only OpenStates data; Voatz values (the test precinct, and the private creator id of
     BROKER-482) live in AWS Secrets Manager, read by the broker. A stray block in a manifest (an older copy on a host)
     is ignored whatever it holds: neither a key nor a value appears in the answer, and it is never a 503."""
-    entry = _with_blocks(_entry(tier=None))
+    entry = _entry(tier=None)
     entry["voatz"] = voatz
     path = tmp_path / "jurisdictions.yaml"
     path.write_text(yaml.safe_dump({"us": entry}))
@@ -268,40 +268,6 @@ def test_a_voatz_block_in_the_manifest_is_never_served(
     ddp_enrollment._cache.clear()
     response = client.get(URL)
     assert response.status_code == 200
-    assert response.json()["jurisdictions"]["us"] == {
-        **EXPECTED_PA,
-        "actions": {"newest_first": False},
-    }
+    assert response.json()["jurisdictions"]["us"] == EXPECTED_PA
     for text in ("voatz", "test_precinct", "FEDERAL-TEST", "creator_id", "999000001"):
         assert text not in response.text
-
-
-def test_an_entry_without_the_blocks_is_served_without_the_keys(
-    client, tmp_path, monkeypatch
-):
-    """A manifest older than BROKER-368: no key at all, never a guessed value, so a reader can tell "not said yet"."""
-    served = _serve(client, tmp_path, monkeypatch, {"pa": _entry(tier=None)})
-    assert served == {"pa": EXPECTED_PA}
-    assert "actions" not in served["pa"]
-
-
-@pytest.mark.parametrize(
-    "block,value",
-    [
-        ("actions", {"newest_first": "yes"}),
-        ("actions", {}),
-        ("actions", "true"),
-    ],
-)
-def test_a_block_in_the_wrong_shape_is_a_503(
-    client, tmp_path, monkeypatch, block, value
-):
-    entry = _with_blocks(_entry(tier=None))
-    entry[block] = value
-    path = tmp_path / "jurisdictions.yaml"
-    path.write_text(yaml.safe_dump({"pa": entry}))
-    monkeypatch.setenv(ddp_enrollment.MANIFEST_ENV, str(path))
-    ddp_enrollment._cache.clear()
-    response = client.get(URL)
-    assert response.status_code == 503
-    assert "pa" in response.json()["detail"]
