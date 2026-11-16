@@ -113,6 +113,23 @@ def test_the_check_passes_when_every_label_is_known(papers, monkeypatch, capsys)
     assert bill_types.main(["check"]) == 0
 
 
+def test_an_amendment_paper_is_a_known_label_and_not_a_bill_type(papers, client):
+    # OPEN-509: Massachusetts labels its amendment papers "amendment"; they leave the bill list like the reports
+    with engine.begin() as c:
+        c.execute(
+            text(
+                "UPDATE opencivicdata_bill SET classification = '{amendment}' WHERE id = :id"
+            ),
+            {"id": PETITION},
+        )
+    with engine.connect() as conn:
+        assert bill_types.unknown_labels(conn) == []
+    ids, _ = _bill_list(client, bill_types_only="true")
+    assert PETITION not in ids
+    ids, _ = _bill_list(client)
+    assert PETITION in ids  # still there for a caller that does not ask, and by direct link
+
+
 # --- GET /bills -----------------------------------------------------------------------------------
 
 

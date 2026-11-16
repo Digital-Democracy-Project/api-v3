@@ -35,6 +35,7 @@ NOT_BILL_TYPES = (
     "communication",  # OPEN-517/518: letters and messages, the Governor's included
     "order",  # OPEN-517/518: chamber and committee orders, precepts, rules orders
     "study request",  # OPEN-517/518 study orders; Louisiana's HSR 1 and HSR 2 (would not change the law if passed)
+    "amendment",  # OPEN-509: Massachusetts amendment papers, listed under their real bill instead
 )
 
 # For raw SQL over opencivicdata_bill aliased `b`. `::text[]` because the real column is varchar[] and the test
