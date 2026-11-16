@@ -1,5 +1,5 @@
 """OPEN-538: api-v3 takes its bill-version rules from DDP's openstates-core fork
-(openstates.utils.version_ordering, pinned in ddp-openstates-core.txt) and keeps no copy."""
+(openstates.utils.version_ordering, installed from the fork's main at build time, OPEN-586) and keeps no copy."""
 
 import ast
 import importlib

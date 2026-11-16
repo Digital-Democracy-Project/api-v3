@@ -226,7 +226,7 @@ class BillPagination(Pagination):
         # (e.g. "Enrolled" < "Introduced" alphabetically, but Enrolled is the later stage).
         # OPEN-538: these rules are imported from DDP's openstates-core fork
         # (openstates.utils.version_ordering), the same module the archiver and
-        # recompute-diff-order use; api-v3 keeps no copy (see ddp-openstates-core.txt).
+        # recompute-diff-order use; api-v3 keeps no copy (see the Dockerfile).
         #
         # A version whose note doesn't match any known stage (STAGE_UNKNOWN) is excluded from
         # latest/previous selection entirely, matching openstates-core's own
