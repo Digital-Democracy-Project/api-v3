@@ -96,7 +96,7 @@ def test_jurisdiction_include_sessions(client):
     assert response["results"][0]["legislative_sessions"][0] == {
         "identifier": "2020",
         "name": "2020",
-        "classification": "",
+        "classification": "primary",
         "start_date": "2020-01-01",
         "end_date": "2020-12-31",
         # OPEN-467: the 2021 session (no end date) is current, so 2020 is the previous one
