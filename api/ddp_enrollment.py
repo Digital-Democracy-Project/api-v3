@@ -15,10 +15,9 @@ enrollment block, so a manifest with or without `tier` (or `archive.scheduled`) 
 If the file is missing or not in the expected shape the answer is 503 with the reason, never an empty list: a
 caller that cannot get the list must say so, not quietly serve "nothing is enrolled".
 
-BROKER-368: a per-state fact the broker used to keep in its own code is served too, as the manifest states it:
-`actions` (`newest_first`: OpenStates lists the state's bill actions newest first). An entry without the block (a
-manifest older than BROKER-368) is served without the key, never with a guessed value, so the broker can tell "the
-manifest does not say yet" from "the manifest says no"; a block in the wrong shape is a 503 like any other.
+No `actions` (OPEN-544): the manifest's `actions.newest_first` (BROKER-368) is gone, since every state's bill actions
+are stored oldest first, and the broker no longer reads it. A stray `actions` block in a manifest (an older copy on a
+host) is ignored whatever it holds: never served, never a 503.
 
 Nothing Voatz is served (BROKER-494; Ramon, 2026-11-13: "api-v3 should only be serving up the ddp-open-states
 data. it's the responsibility of the broker to bring together data from openstates, voatz, legbot, etc."). A state's
@@ -29,11 +28,11 @@ served, never a 503.
 import datetime
 import os
 import threading
-from typing import Dict, Optional
+from typing import Dict
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, StrictBool
+from pydantic import BaseModel, Field
 
 from .auth import apikey_auth
 
@@ -44,13 +43,6 @@ DEFAULT_MANIFEST_PATH = "/app/jurisdictions.yaml"
 
 _lock = threading.Lock()
 _cache = {}  # path -> (mtime, parsed jurisdictions dict)
-
-
-class Actions(BaseModel):
-    newest_first: StrictBool = Field(
-        ...,
-        description="OpenStates lists this state's bill actions newest first (us, nc).",
-    )
 
 
 class JurisdictionEnrollment(BaseModel):
@@ -67,10 +59,6 @@ class JurisdictionEnrollment(BaseModel):
             "Every boolean under the manifest's `enrollment:` block, e.g. people_refresh, search_refresh, "
             "embedding, cloud_path, api_smoke_test, qa_sweep, replica_routing, legbot_replica."
         ),
-    )
-    actions: Optional[Actions] = Field(
-        None,
-        description="The manifest's `actions` block (BROKER-368); absent when the manifest has none.",
     )
 
 
@@ -114,11 +102,8 @@ def _load(path: str):
                 "archive": bool(entry["archive"]["enabled"]),
                 "enrollment": dict(enrollment),
             }
-            # BROKER-368: served only when the manifest has it; checked here, so
-            # a wrong shape is a 503 like any other, not a 500. A `voatz` block is
-            # never read (BROKER-494).
-            if "actions" in entry:
-                row["actions"] = Actions(**entry["actions"]).dict()
+            # Neither an `actions` block (OPEN-544) nor a `voatz` block (BROKER-494)
+            # is read.
             parsed[str(code).lower()] = row
         # pydantic's ValidationError is a ValueError
         except (KeyError, TypeError, ValueError) as exc:
@@ -133,7 +118,6 @@ def _load(path: str):
 @router.get(
     "",
     response_model=EnrollmentResponse,
-    response_model_exclude_unset=True,  # an entry without actions is served without the key (BROKER-368)
     summary="Which jurisdictions are enrolled in which feature",
 )
 def get_enrollment(auth: str = Depends(apikey_auth)):
