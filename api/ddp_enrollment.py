@@ -24,11 +24,18 @@ data. it's the responsibility of the broker to bring together data from openstat
 Voatz test precinct and its private poll creator id (BROKER-482) live in its Voatz entry in AWS Secrets Manager, read
 by the broker. A stray `voatz` block in a manifest (an older copy on a host) is ignored whatever it holds: never
 served, never a 503.
+
+Chamber names (OPEN-556, PLAN-state-specific-handling C7): each entry's `chambers` block (the legislature's own names
+for its upper and lower chambers, and `unicameral` for a one-house legislature, Nebraska, whose one name is in `upper`
+and whose `lower` is null) is served as it is, so the website and ddp-sync stop printing "House"/"Senate" everywhere.
+The manifest's validator requires the block on every entry, so a manifest without it (or with a misshapen one) is not
+in the expected shape: 503. Release order: the manifest first on each host, then this; a rollback goes the other way
+(this first, then the manifest).
 """
 import datetime
 import os
 import threading
-from typing import Dict
+from typing import Dict, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
@@ -43,6 +50,20 @@ DEFAULT_MANIFEST_PATH = "/app/jurisdictions.yaml"
 
 _lock = threading.Lock()
 _cache = {}  # path -> (mtime, parsed jurisdictions dict)
+
+
+class Chambers(BaseModel):
+    unicameral: bool = Field(..., description="true for a one-house legislature (Nebraska)")
+    upper: str = Field(
+        ...,
+        example="Senate",
+        description="The upper chamber's name; a one-house legislature's one name",
+    )
+    lower: Optional[str] = Field(
+        ...,
+        example="House of Delegates",
+        description="The lower chamber's name; null for a one-house legislature",
+    )
 
 
 class JurisdictionEnrollment(BaseModel):
@@ -60,6 +81,9 @@ class JurisdictionEnrollment(BaseModel):
             "embedding, cloud_path, api_smoke_test, qa_sweep, replica_routing, legbot_replica."
         ),
     )
+    chambers: Chambers = Field(
+        ..., description="The legislature's own chamber names (manifest `chambers:`)"
+    )
 
 
 class EnrollmentResponse(BaseModel):
@@ -72,6 +96,17 @@ class EnrollmentResponse(BaseModel):
 
 def _unavailable(reason: str):
     return HTTPException(503, detail=f"jurisdiction manifest unavailable: {reason}")
+
+
+def _chambers(block):
+    """The manifest's `chambers` block (OPEN-556). Only the shape is checked here, as for `enrollment`; the rules
+    between the fields (a one-house legislature has no lower chamber) are the manifest validator's."""
+    unicameral, upper, lower = block["unicameral"], block["upper"], block["lower"]
+    if not isinstance(unicameral, bool):
+        raise TypeError("chambers.unicameral is not a boolean")
+    if not isinstance(upper, str) or not (lower is None or isinstance(lower, str)):
+        raise TypeError("chamber names must be text (lower may be null)")
+    return {"unicameral": unicameral, "upper": upper, "lower": lower}
 
 
 def _load(path: str):
@@ -101,6 +136,7 @@ def _load(path: str):
                 "status": entry["status"],
                 "archive": bool(entry["archive"]["enabled"]),
                 "enrollment": dict(enrollment),
+                "chambers": _chambers(entry["chambers"]),
             }
             # Neither an `actions` block (OPEN-544) nor a `voatz` block (BROKER-494)
             # is read.
