@@ -9,7 +9,11 @@ import yaml
 from api import ddp_enrollment
 
 URL = "/ddp/enrollment"
-TWO_HOUSES = {"unicameral": False, "upper": "Senate", "lower": "House of Representatives"}
+TWO_HOUSES = {
+    "unicameral": False,
+    "upper": "Senate",
+    "lower": "House of Representatives",
+}
 
 
 def _entry(status="live", tier="secondary", archive=True, scheduled=None, **enrollment):
@@ -287,12 +291,28 @@ def test_serves_each_legislatures_own_chamber_names(client, tmp_path, monkeypatc
     one house (its one name in `upper`, `lower` null)."""
     nv, va, ne = _entry(), _entry(), _entry()
     nv["chambers"] = {"unicameral": False, "upper": "Senate", "lower": "Assembly"}
-    va["chambers"] = {"unicameral": False, "upper": "Senate", "lower": "House of Delegates"}
+    va["chambers"] = {
+        "unicameral": False,
+        "upper": "Senate",
+        "lower": "House of Delegates",
+    }
     ne["chambers"] = {"unicameral": True, "upper": "Legislature", "lower": None}
     served = _serve(client, tmp_path, monkeypatch, {"nv": nv, "va": va, "ne": ne})
-    assert served["nv"]["chambers"] == {"unicameral": False, "upper": "Senate", "lower": "Assembly"}
-    assert served["va"]["chambers"] == {"unicameral": False, "upper": "Senate", "lower": "House of Delegates"}
-    assert served["ne"]["chambers"] == {"unicameral": True, "upper": "Legislature", "lower": None}
+    assert served["nv"]["chambers"] == {
+        "unicameral": False,
+        "upper": "Senate",
+        "lower": "Assembly",
+    }
+    assert served["va"]["chambers"] == {
+        "unicameral": False,
+        "upper": "Senate",
+        "lower": "House of Delegates",
+    }
+    assert served["ne"]["chambers"] == {
+        "unicameral": True,
+        "upper": "Legislature",
+        "lower": None,
+    }
 
 
 @pytest.mark.parametrize(
@@ -305,7 +325,9 @@ def test_serves_each_legislatures_own_chamber_names(client, tmp_path, monkeypatc
         {"unicameral": False, "upper": "Senate", "lower": 7},
     ],
 )
-def test_a_missing_or_misshapen_chambers_block_is_503(client, tmp_path, monkeypatch, chambers):
+def test_a_missing_or_misshapen_chambers_block_is_503(
+    client, tmp_path, monkeypatch, chambers
+):
     """OPEN-556: the manifest's validator requires the block on every entry, so one without it is not the expected
     shape: 503 naming the reason, never an answer without the names."""
     entry = _entry(tier=None)

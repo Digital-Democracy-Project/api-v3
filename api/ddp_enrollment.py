@@ -53,7 +53,9 @@ _cache = {}  # path -> (mtime, parsed jurisdictions dict)
 
 
 class Chambers(BaseModel):
-    unicameral: bool = Field(..., description="true for a one-house legislature (Nebraska)")
+    unicameral: bool = Field(
+        ..., description="true for a one-house legislature (Nebraska)"
+    )
     upper: str = Field(
         ...,
         example="Senate",
