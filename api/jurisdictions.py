@@ -1,3 +1,4 @@
+import datetime
 from enum import Enum
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query
@@ -6,13 +7,32 @@ from .schemas import Jurisdiction, JurisdictionClassification
 from .pagination import Pagination
 from .auth import apikey_auth
 from .utils import jurisdiction_filter
-from .current_session import session_flags
+from sqlalchemy.orm import object_session
+from .current_session import not_started, session_flags
 
 
 class JurisdictionInclude(str, Enum):
     organizations = "organizations"
     legislative_sessions = "legislative_sessions"
     latest_runs = "latest_runs"
+
+
+def _upcoming_sessions_with_bills(jurisdiction, today: datetime.date) -> List[str]:
+    """OPEN-660: of the jurisdiction's sessions that have not started, the ones that already
+    have bills (pre-filing). `jurisdiction` is the database row. No query when every session has
+    started, which is most of the time."""
+    sessions = jurisdiction.legislative_sessions
+    names = set(not_started(sessions, today))
+    upcoming = {s.id: s.identifier for s in sessions if s.identifier in names}
+    if not upcoming:
+        return []
+    db = object_session(jurisdiction)
+    with_bills = (
+        db.query(models.Bill.legislative_session_id)
+        .filter(models.Bill.legislative_session_id.in_(list(upcoming)))
+        .distinct()
+    )
+    return [upcoming[row[0]] for row in with_bills]
 
 
 class JurisdictionPagination(Pagination):
@@ -36,7 +56,12 @@ class JurisdictionPagination(Pagination):
             obj.latest_runs = data.get_latest_runs()
         # one rule for "current" / "previous", published here and nowhere else (OPEN-467)
         if JurisdictionInclude.legislative_sessions in includes:
-            flags = session_flags(obj.legislative_sessions)
+            today = datetime.date.today()  # one date for both steps
+            flags = session_flags(
+                obj.legislative_sessions,
+                today,
+                with_bills=_upcoming_sessions_with_bills(data, today),
+            )
             for session in obj.legislative_sessions:
                 session.is_current, session.is_previous = flags[session.identifier]
 

@@ -69,8 +69,8 @@ REAL = {
 TODAY = datetime.date(2026, 10, 30)
 
 
-def flagged(state, today=TODAY):
-    flags = session_flags(REAL[state], today)
+def flagged(state, today=TODAY, with_bills=()):
+    flags = session_flags(REAL[state], today, with_bills)
     current = sorted(i for i, (c, _) in flags.items() if c)
     previous = sorted(i for i, (_, p) in flags.items() if p)
     return current, previous
@@ -97,7 +97,7 @@ def test_expected_table_between_sessions(state, current, previous):
     assert flagged(state) == (current, previous)
 
 
-def test_session_that_has_not_started_is_never_current_or_previous():
+def test_session_that_has_not_started_and_has_no_bills_is_never_current_or_previous():
     for state, sessions in REAL.items():
         flags = session_flags(sessions, TODAY)
         for s in sessions:
@@ -217,3 +217,52 @@ def test_previous_is_never_also_current():
     assert flags["A"] == (True, False)
     assert flags["B"] == (True, False)
     assert flags["C"] == (False, True)
+
+
+# OPEN-660 (Ramon, 2026-11-20, "Show them sooner"): a session in pre-filing (start_date after
+# today, bills already filed) is current beside what is current today, so its bills show and
+# can be polled before the session opens.
+PREFILING_DAY = datetime.date(2026, 11, 20)
+
+
+def test_prefiling_session_is_current_beside_the_running_one():
+    # Virginia on 2026-11-20: 465 bills stored for 2027, which starts 2027-01-13
+    assert flagged("va", PREFILING_DAY, {"2027", "2026", "2025"}) == (
+        ["2026", "2027"],
+        ["2025"],
+    )
+    # the US 119th is still running; a 120th with bills would be current beside it
+    sessions = REAL["us"] + [S("120", "primary", "2027-01-03", "2029-01-03")]
+    flags = session_flags(sessions, PREFILING_DAY, {"120", "119"})
+    assert flags["119"] == (True, False) and flags["120"] == (True, False)
+    assert flags["118"] == (False, True)
+
+
+def test_prefiling_session_without_bills_is_not_current():
+    # Utah 2027 has no bills yet: nothing changes
+    assert flagged("ut", PREFILING_DAY, set()) == (["2026"], ["2025"])
+    assert flagged("ut", PREFILING_DAY, {"2026", "2025"}) == (["2026"], ["2025"])
+
+
+def test_bills_in_started_sessions_change_nothing():
+    # with_bills only matters for a session that has not started
+    for state in REAL:
+        everything = {s.identifier for s in REAL[state]} - {
+            s.identifier for s in REAL[state] if s.start_date > TODAY.isoformat()
+        }
+        assert flagged(state, TODAY, everything) == flagged(state), state
+
+
+def test_prefiling_session_is_never_previous_and_never_hides_the_running_one():
+    # Florida's 2027 (prefiled) next to the ended regular 2026, the fallback current session
+    current, previous = flagged("fl", PREFILING_DAY, {"2027"})
+    assert current == ["2026", "2027"] and previous == ["2025"]
+
+
+def test_on_its_start_date_the_session_is_current_by_the_old_rule():
+    # bills or not, Utah 2027 is current from 2027-01-20 and 2026 becomes previous
+    assert flagged("ut", datetime.date(2027, 1, 20), {"2027"}) == (["2027"], ["2026"])
+    assert flagged("ut", datetime.date(2027, 1, 19), {"2027"}) == (
+        ["2026", "2027"],
+        ["2025"],
+    )
