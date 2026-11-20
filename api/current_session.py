@@ -5,10 +5,15 @@ Nothing else in the platform should decide this again: ddp-sync, the nightly scr
 script, the broker and the website read the `is_current` / `is_previous` flags that
 /jurisdictions/{id}?include=legislative_sessions publishes from here.
 
-Rule (decided by Ramon, 2026-10-31: an active special session counts as current):
+Rule (decided by Ramon, 2026-10-31: an active special session counts as current; 2026-11-20,
+OPEN-660: a session in pre-filing counts as current, "we like to put Voatz polls on bills in
+pre-filing so that voters have more time to weigh in before the session starts"):
 
 * A session that has not started (start_date after today, or no usable start_date) is never
-  current or previous.
+  previous, and is current only while it is in pre-filing: its start_date is after today and it
+  already has bills (the caller names those sessions in `with_bills`). It is current beside
+  whatever else is current, and it changes nothing else below: the fallback regular session and
+  the previous session are worked out from started sessions only, as before.
 * A session is *active* when it has started and has not ended (a blank end_date is open-ended).
 * Current = every active session, plus, when no REGULAR session is active (between sessions),
   the newest regular session that has started. So a state between sessions still has a current
@@ -26,7 +31,7 @@ suffix: VA's "2026S1" (a digit, then S or E, then digits) or its older "2018spec
 """
 import datetime
 import re
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Collection, Dict, List, Optional, Sequence, Tuple
 
 # VA 2026S1, NC 2025E1, UT 2025S2, and VA's older "2018specialI" (blank classification there)
 _SPECIAL_SUFFIX = re.compile(r"\d[SsEe]\d+$|special", re.IGNORECASE)
@@ -48,14 +53,30 @@ def is_regular(identifier: str, classification: Optional[str]) -> bool:
     return not _SPECIAL_SUFFIX.search(identifier or "")
 
 
+def not_started(sessions: Sequence, today: Optional[datetime.date] = None) -> List[str]:
+    """Identifiers of the sessions whose start_date is after today: the only ones the caller
+    needs to look up bills for (OPEN-660)."""
+    today = today or datetime.date.today()
+    return [
+        s.identifier
+        for s in sessions
+        if (start := _parse_date(s.start_date)) is not None and start > today
+    ]
+
+
 def session_flags(
-    sessions: Sequence, today: Optional[datetime.date] = None
+    sessions: Sequence,
+    today: Optional[datetime.date] = None,
+    with_bills: Collection[str] = (),
 ) -> Dict[str, Tuple[bool, bool]]:
     """
     sessions: objects with identifier, classification, start_date, end_date (one jurisdiction).
+    with_bills: identifiers of sessions that have at least one bill; only the not-started ones
+    are read (OPEN-660, pre-filing).
     Returns {identifier: (is_current, is_previous)} for every session.
     """
     today = today or datetime.date.today()
+    prefiling = set(not_started(sessions, today)) & set(with_bills)
     started: List[Tuple[datetime.date, Optional[datetime.date], str, bool]] = []
     for s in sessions:
         start = _parse_date(s.start_date)
@@ -91,6 +112,7 @@ def session_flags(
         ]
         previous = earlier[0][2] if earlier else None
 
+    current |= prefiling
     return {
         s.identifier: (s.identifier in current, s.identifier == previous)
         for s in sessions
