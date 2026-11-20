@@ -164,7 +164,8 @@ def test_default_order_still_needs_a_jurisdiction_or_a_query(client):
     # unchanged: no sort, or any other sort, with neither still answers 400
     assert client.get("/bills").status_code == 400
     assert client.get("/bills?sort=updated_desc").status_code == 400
-    assert client.get("/bills?sort=latest_action_asc").status_code == 400
+    assert client.get("/bills?sort=first_action_desc").status_code == 400
+    # (OPEN-629 allows latest_action_asc without one: test_open629_oldest_action.py)
 
 
 def test_a_session_still_needs_a_jurisdiction_with_the_new_order(client):

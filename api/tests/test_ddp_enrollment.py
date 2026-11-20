@@ -9,6 +9,11 @@ import yaml
 from api import ddp_enrollment
 
 URL = "/ddp/enrollment"
+TWO_HOUSES = {
+    "unicameral": False,
+    "upper": "Senate",
+    "lower": "House of Representatives",
+}
 
 
 def _entry(status="live", tier="secondary", archive=True, scheduled=None, **enrollment):
@@ -22,6 +27,7 @@ def _entry(status="live", tier="secondary", archive=True, scheduled=None, **enro
         "archive": {"enabled": archive, "timeout_s": 14400},
         "enrollment": base,
         "waf": {"profile": "none"},
+        "chambers": dict(TWO_HOUSES),
     }
     if tier is not None:
         entry["tier"] = tier
@@ -59,6 +65,7 @@ def test_serves_every_jurisdiction_with_its_features(client, manifest):
             "search_refresh": False,
             "replica_routing": True,
         },
+        "chambers": TWO_HOUSES,
     }
     assert body["jurisdictions"]["us"]["enrollment"]["replica_routing"] is False
     assert body["manifest_mtime"].endswith("Z") or "+00:00" in body["manifest_mtime"]
@@ -89,6 +96,7 @@ EXPECTED_PA = {
         "search_refresh": False,
         "replica_routing": True,
     },
+    "chambers": TWO_HOUSES,
 }
 EXPECTED_NE = {
     "name": "Somewhere",
@@ -99,6 +107,7 @@ EXPECTED_NE = {
         "search_refresh": False,
         "replica_routing": False,
     },
+    "chambers": TWO_HOUSES,
 }
 
 
@@ -272,3 +281,64 @@ def test_a_voatz_block_in_the_manifest_is_never_served(
     assert response.json()["jurisdictions"]["us"] == EXPECTED_PA
     for text in ("voatz", "test_precinct", "FEDERAL-TEST", "creator_id", "999000001"):
         assert text not in response.text
+
+
+# --- OPEN-556: chamber names and the one-house flag ---------------------------------------------------------------
+
+
+def test_serves_each_legislatures_own_chamber_names(client, tmp_path, monkeypatch):
+    """OPEN-556: the manifest's `chambers` block is served as it is: an Assembly, a House of Delegates, and Nebraska's
+    one house (its one name in `upper`, `lower` null)."""
+    nv, va, ne = _entry(), _entry(), _entry()
+    nv["chambers"] = {"unicameral": False, "upper": "Senate", "lower": "Assembly"}
+    va["chambers"] = {
+        "unicameral": False,
+        "upper": "Senate",
+        "lower": "House of Delegates",
+    }
+    ne["chambers"] = {"unicameral": True, "upper": "Legislature", "lower": None}
+    served = _serve(client, tmp_path, monkeypatch, {"nv": nv, "va": va, "ne": ne})
+    assert served["nv"]["chambers"] == {
+        "unicameral": False,
+        "upper": "Senate",
+        "lower": "Assembly",
+    }
+    assert served["va"]["chambers"] == {
+        "unicameral": False,
+        "upper": "Senate",
+        "lower": "House of Delegates",
+    }
+    assert served["ne"]["chambers"] == {
+        "unicameral": True,
+        "upper": "Legislature",
+        "lower": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "chambers",
+    [
+        None,  # no block at all: an older manifest copy
+        {"upper": "Senate", "lower": "House of Representatives"},
+        {"unicameral": "no", "upper": "Senate", "lower": "House of Representatives"},
+        {"unicameral": False, "upper": None, "lower": "House of Representatives"},
+        {"unicameral": False, "upper": "Senate", "lower": 7},
+    ],
+)
+def test_a_missing_or_misshapen_chambers_block_is_503(
+    client, tmp_path, monkeypatch, chambers
+):
+    """OPEN-556: the manifest's validator requires the block on every entry, so one without it is not the expected
+    shape: 503 naming the reason, never an answer without the names."""
+    entry = _entry(tier=None)
+    if chambers is None:
+        del entry["chambers"]
+    else:
+        entry["chambers"] = chambers
+    path = tmp_path / "jurisdictions.yaml"
+    path.write_text(yaml.safe_dump({"ne": entry}))
+    monkeypatch.setenv(ddp_enrollment.MANIFEST_ENV, str(path))
+    ddp_enrollment._cache.clear()
+    response = client.get(URL)
+    assert response.status_code == 503
+    assert "'ne' is not in the expected shape" in response.json()["detail"]

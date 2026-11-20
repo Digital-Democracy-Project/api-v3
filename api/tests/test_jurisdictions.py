@@ -1,4 +1,9 @@
-from .conftest import query_logger
+import datetime
+import uuid
+from contextlib import contextmanager
+
+from api.db.models import Bill, Jurisdiction, LegislativeSession
+from .conftest import TestingSessionLocal, query_logger
 
 
 def test_jurisdictions_simplest(client):
@@ -182,3 +187,65 @@ def test_jurisdiction_detail_include_sessions(client):
     ]
     assert response["legislative_sessions"][1]["identifier"] == "2021"
     assert response["legislative_sessions"][1]["downloads"] == []
+
+
+@contextmanager
+def _upcoming_ne_sessions():
+    """OPEN-660: two Nebraska sessions that start in the far future, "2999" with one bill
+    (pre-filing) and "3000" with none, next to the running 2021 session. Removed on exit."""
+    db = TestingSessionLocal()
+    ne = db.query(Jurisdiction).filter(Jurisdiction.name == "Nebraska").one()
+    prefiling = LegislativeSession(
+        jurisdiction=ne, identifier="2999", name="2999", start_date="2999-01-01"
+    )
+    empty = LegislativeSession(
+        jurisdiction=ne, identifier="3000", name="3000", start_date="3000-01-01"
+    )
+    bill = Bill(
+        id=f"ocd-bill/{uuid.uuid4()}",
+        identifier="LB 1",
+        title="Pre-filed bill",
+        legislative_session=prefiling,
+        from_organization_id="nel",
+        subject=[],
+        classification=["bill"],
+        extras={},
+        created_at=datetime.datetime.utcnow(),
+        updated_at=datetime.datetime.utcnow(),
+    )
+    db.add_all([prefiling, empty, bill])
+    db.commit()
+    try:
+        yield
+    finally:
+        db.delete(bill)
+        db.delete(prefiling)
+        db.delete(empty)
+        db.commit()
+        db.close()
+
+
+def test_prefiling_session_is_current_beside_the_running_one(client):
+    # OPEN-660 (Ramon, 2026-11-20): a session that has not started but already has bills is
+    # current, so its bills show and can be polled; the running session stays current, the
+    # previous one stays previous, and an upcoming session with no bills is not current.
+    with _upcoming_ne_sessions():
+        response = client.get("/jurisdictions/ne?include=legislative_sessions").json()
+        # one more query than without upcoming sessions: the bills lookup for them
+        assert query_logger.count == 4
+    flags = {
+        s["identifier"]: (s["is_current"], s["is_previous"])
+        for s in response["legislative_sessions"]
+    }
+    assert flags == {
+        "2020": (False, True),
+        "2021": (True, False),
+        "2999": (True, False),
+        "3000": (False, False),
+    }
+
+
+def test_no_bills_lookup_when_every_session_has_started(client):
+    # the extra query runs only for a jurisdiction that has a session yet to start
+    client.get("/jurisdictions/ne?include=legislative_sessions")
+    assert query_logger.count == 3
