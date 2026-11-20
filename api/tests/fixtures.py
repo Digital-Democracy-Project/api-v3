@@ -236,6 +236,8 @@ def nebraska():
         jurisdiction=j,
         identifier="2020",
         name="2020",
+        # OPEN-557: api-v3 reads regular/special from the stored classification only
+        classification="primary",
         start_date="2020-01-01",
         end_date="2020-12-31",
     )
@@ -247,7 +249,11 @@ def nebraska():
         url="https://example.com",
     )
     ls2021 = LegislativeSession(
-        jurisdiction=j, identifier="2021", name="2020", start_date="2021-01-01"
+        jurisdiction=j,
+        identifier="2021",
+        name="2020",
+        classification="primary",
+        start_date="2021-01-01",
     )
     leg = Organization(
         id="nel",

@@ -25,16 +25,13 @@ pre-filing so that voters have more time to weigh in before the session starts")
 * A blank end_date, or one that is not a date, is open-ended (no tracked jurisdiction has a
   non-date value today; the column is free text).
 
-"Regular" is `classification == "primary"`. Virginia and Washington leave classification
-blank; there a blank classification is regular unless the identifier ends in a special-session
-suffix: VA's "2026S1" (a digit, then S or E, then digits) or its older "2018specialI".
+"Regular" is the stored `classification == "primary"`, and nothing else (OPEN-557): each
+scraper's session list sets it and the import stores it. There is no guess from the identifier;
+a session stored with a blank classification is not regular, so it is current only while it is
+active and is never the fallback current or the previous session.
 """
 import datetime
-import re
 from typing import Collection, Dict, List, Optional, Sequence, Tuple
-
-# VA 2026S1, NC 2025E1, UT 2025S2, and VA's older "2018specialI" (blank classification there)
-_SPECIAL_SUFFIX = re.compile(r"\d[SsEe]\d+$|special", re.IGNORECASE)
 
 
 def _parse_date(value: Optional[str]) -> Optional[datetime.date]:
@@ -47,10 +44,8 @@ def _parse_date(value: Optional[str]) -> Optional[datetime.date]:
         return None
 
 
-def is_regular(identifier: str, classification: Optional[str]) -> bool:
-    if classification:
-        return classification == "primary"
-    return not _SPECIAL_SUFFIX.search(identifier or "")
+def is_regular(classification: Optional[str]) -> bool:
+    return classification == "primary"
 
 
 def not_started(sessions: Sequence, today: Optional[datetime.date] = None) -> List[str]:
@@ -86,7 +81,7 @@ def session_flags(
                     start,
                     _parse_date(s.end_date),
                     s.identifier,
-                    is_regular(s.identifier, s.classification),
+                    is_regular(s.classification),
                 )
             )
 

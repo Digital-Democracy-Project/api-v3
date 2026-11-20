@@ -52,17 +52,25 @@ REAL = {
         S("2025S2", "special", "2025-12-09", "2025-12-12"),
         S("2025", "primary", "2025-01-21", "2025-03-17"),
     ],
-    # Virginia leaves classification blank, special sessions included (2026S1)
+    # Virginia, Washington and Georgia as stored once their scraper session lists set
+    # classification (OPEN-557); until then those rows are blank on the replica
     "va": [
-        S("2027", "", "2027-01-13", "2027-02-27"),
-        S("2026S1", "", "2026-04-23", "2026-05-01"),
-        S("2026", "", "2026-01-14", "2026-03-14"),
-        S("2025", "", "2025-01-08", "2025-02-22"),
+        S("2027", "primary", "2027-01-13", "2027-02-27"),
+        S("2026S1", "special", "2026-04-23", "2026-05-01"),
+        S("2026", "primary", "2026-01-14", "2026-03-14"),
+        S("2025", "primary", "2025-01-08", "2025-02-22"),
     ],
     "wa": [
         S("2025-2026", "primary", "2025-01-13", "2026-03-06"),
         S("2023-2024", "primary", "2023-01-09", "2024-03-07"),
-        S("2019-2020", "", "2019-01-14", "2020-03-12"),
+        S("2019-2020", "primary", "2019-01-14", "2020-03-12"),
+    ],
+    # the replica on 2026-11-17 (end date as stored)
+    "ga": [
+        S("2026_ss", "special", "2026-06-17", "2026-12-13"),
+        S("2025_26", "primary", "2025-01-13", "2026-04-02"),
+        S("2023_ss", "special", "2023-11-29", "2023-12-07"),
+        S("2023_24", "primary", "2023-01-09", "2024-04-02"),
     ],
 }
 
@@ -115,7 +123,7 @@ def test_active_special_session_is_current_alongside_the_regular_one():
 
 
 def test_two_sessions_active_at_once_are_both_current():
-    # Virginia's 2026S1 (blank classification, identifier suffix) runs inside the year.
+    # Virginia's 2026S1 runs inside the year.
     assert flagged("va", datetime.date(2026, 4, 25)) == (["2026", "2026S1"], ["2025"])
     # UT: regular 2026 active and a special overlapping it (synthetic overlap on real rows).
     sessions = REAL["ut"] + [S("2026S1", "special", "2026-02-01", "2026-02-05")]
@@ -134,17 +142,44 @@ def test_a_regular_session_becomes_current_on_its_start_date():
     assert flagged("ut", datetime.date(2027, 1, 20)) == (["2027"], ["2026"])
 
 
-def test_blank_classification_special_is_not_regular():
-    assert is_regular("2026", "") is True
-    assert is_regular("2026S1", "") is False
-    assert is_regular("2025E1", "") is False
-    assert is_regular("2019-2020", "") is True
-    # Virginia's older specials (blank classification, real identifiers)
-    assert is_regular("2018specialI", "") is False
-    assert is_regular("2011specialI", "") is False
-    # a stated classification always wins over the identifier shape
-    assert is_regular("2023s1", "special") is False
-    assert is_regular("2025S1", "primary") is True
+def test_regular_is_the_stored_classification_and_nothing_else():
+    # OPEN-557: no guess from the identifier, so blank or missing is not regular
+    assert is_regular("primary") is True
+    assert is_regular("special") is False
+    assert is_regular("") is False
+    assert is_regular(None) is False
+
+
+def test_identifier_shape_does_not_decide():
+    # Georgia's specials end "_ss", which the old identifier guess read as regular, so the
+    # 2026 special session stood in as the current regular one and hid 2025_26.
+    assert flagged("ga") == (["2025_26", "2026_ss"], ["2023_24"])
+    # an identifier that looks special is regular when stored as primary, and the reverse
+    sessions = [
+        S("2026S1", "primary", "2026-01-01", "2026-03-01"),
+        S("2026", "special", "2026-05-01", "2026-05-05"),
+        S("2025", "primary", "2025-01-01", "2025-03-01"),
+    ]
+    flags = session_flags(sessions, TODAY)
+    assert flags == {
+        "2026S1": (True, False),
+        "2026": (False, False),
+        "2025": (False, True),
+    }
+
+
+def test_blank_classification_is_current_only_while_active():
+    # a row the scraper list has not classified yet: never the fallback current or previous
+    sessions = [
+        S("2026", "", "2026-01-14", "2026-03-14"),
+        S("2025", "", "2025-01-08", "2025-02-22"),
+        S("2026S9", "", "2026-10-01", "2026-12-31"),
+    ]
+    assert session_flags(sessions, TODAY) == {
+        "2026": (False, False),
+        "2025": (False, False),
+        "2026S9": (True, False),
+    }
 
 
 def test_blank_or_bad_dates_do_not_crash_and_never_count_as_started():
@@ -168,8 +203,8 @@ def test_a_date_that_is_not_a_date_in_end_date_is_open_ended():
     assert flags == {"x": (True, False)}
 
 
-def test_old_va_special_with_blank_classification_is_never_previous():
-    sessions = REAL["va"] + [S("2020specialI", "", "2020-08-18", "2020-11-10")]
+def test_old_va_special_is_never_previous():
+    sessions = REAL["va"] + [S("2020specialI", "special", "2020-08-18", "2020-11-10")]
     assert session_flags(sessions, TODAY)["2020specialI"] == (False, False)
 
 
