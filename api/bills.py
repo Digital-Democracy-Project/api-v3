@@ -4,7 +4,7 @@ from typing import Optional, List
 from enum import Enum
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import func, desc, nullslast
-from sqlalchemy.orm import contains_eager, object_session
+from sqlalchemy.orm import contains_eager, object_session, selectinload
 from openstates.utils.transformers import fix_bill_id
 from openstates.utils.version_ordering import (
     STAGE_AMENDMENT,
@@ -22,7 +22,11 @@ from .schemas import Bill
 from .pagination import Pagination
 from .auth import apikey_auth
 from .utils import jurisdiction_filter
-from .bill_version_flag import baseline_column_present, flag_column_present
+from .bill_version_flag import (
+    baseline_column_present,
+    flag_column_present,
+    relation_label_column_present,
+)
 from .bill_types import is_bill_type_clause
 from .document_choice import preferred_document
 
@@ -89,6 +93,23 @@ class BillPagination(Pagination):
     # OPEN-493: the bare list (no include=) allows 50 a page, so the website's 50-row page is one call and one count
     # instead of three; an include= keeps 20 (the heavier answers stay bounded). The default per_page is unchanged.
     max_per_page_without_includes = 50
+
+    @classmethod
+    def select_or_noload(cls, query, includes):
+        """OPEN-641: with include=related_bills, also load each link's ddp_relation_label in the same select-in query,
+        but only where the database has the column (relation_label_column_present); otherwise `label` is null."""
+        query = super().select_or_noload(query, includes)
+        if (
+            includes
+            and BillInclude.related_bills in includes
+            and relation_label_column_present(query.session)
+        ):
+            query = query.options(
+                selectinload(models.Bill.related_bills).undefer(
+                    models.RelatedBill.ddp_relation_label
+                )
+            )
+        return query
 
     @classmethod
     def _archived_row_for(cls, db, data, version):

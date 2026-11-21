@@ -1,5 +1,5 @@
 import uuid
-from .conftest import query_logger
+from .conftest import engine, query_logger
 from api.bills import BillSortOption
 
 
@@ -370,6 +370,12 @@ def test_bills_include_votes(client):
 
 
 def test_bills_include_related_bills(client):
+    # OPEN-641: the column check is cached for minutes, so a request finds it warm; the label itself rides the
+    # same select-in query as the links, so the count stays 3.
+    from api.bill_version_flag import relation_label_column_present
+
+    with engine.connect() as conn:
+        relation_label_column_present(conn)
     response = client.get("/bills?q=HB1&include=related_bills")
     assert query_logger.count == 3
     assert response.status_code == 200
