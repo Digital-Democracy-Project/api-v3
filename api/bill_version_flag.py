@@ -30,11 +30,16 @@ _RECHECK_SECONDS = 300
 _cache = {}
 
 
-def _column_present(bind, column: str, table: str = "ddp_bill_version_document") -> bool:
+def _column_present(
+    bind, column: str, table: str = "ddp_bill_version_document"
+) -> bool:
     now = time.monotonic()
     checked_at, present = _cache.get((table, column), (None, False))
     if checked_at is None or now - checked_at > _RECHECK_SECONDS:
-        present = bind.execute(_CHECK_SQL, {"table": table, "column": column}).first() is not None
+        present = (
+            bind.execute(_CHECK_SQL, {"table": table, "column": column}).first()
+            is not None
+        )
         _cache[(table, column)] = (now, present)
     return present
 
@@ -52,7 +57,9 @@ def baseline_column_present(bind) -> bool:
 def relation_label_column_present(bind) -> bool:
     """True when the database has opencivicdata_relatedbill.ddp_relation_label (OPEN-640, core migration data.0052):
     the legislature's own word for a bill link (OPEN-641). `bind` is a Session or a Connection."""
-    return _column_present(bind, "ddp_relation_label", table="opencivicdata_relatedbill")
+    return _column_present(
+        bind, "ddp_relation_label", table="opencivicdata_relatedbill"
+    )
 
 
 def forget_check() -> None:

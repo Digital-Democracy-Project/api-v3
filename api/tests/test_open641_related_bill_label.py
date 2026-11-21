@@ -53,7 +53,12 @@ def _related(client, bill_id):
 def test_label_and_resolved_bill_are_served(client):
     with _temp_bill("HB 9641", []) as bill_id:
         links = [
-            ("SB 1278", "companion", "Identical bill", True),  # Arizona's "Identical to SB 1278"
+            (
+                "SB 1278",
+                "companion",
+                "Identical bill",
+                True,
+            ),  # Arizona's "Identical to SB 1278"
             ("HB 2125", "related", None, False),  # a link with no word stored
             ("HB 2141", "related", "", False),  # an empty word is no word
         ]
@@ -70,9 +75,15 @@ def test_label_and_resolved_bill_are_served(client):
 
 def test_a_database_without_the_column_answers_as_before(client):
     with _temp_bill("HB 9642", []) as bill_id:
-        with _links(bill_id, [("SB 1278", "companion", "Identical bill", True)]) as resolved_id:
+        with _links(
+            bill_id, [("SB 1278", "companion", "Identical bill", True)]
+        ) as resolved_id:
             with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE opencivicdata_relatedbill DROP COLUMN ddp_relation_label"))
+                conn.execute(
+                    text(
+                        "ALTER TABLE opencivicdata_relatedbill DROP COLUMN ddp_relation_label"
+                    )
+                )
             forget_check()
             try:
                 related = _related(client, bill_id)
@@ -82,6 +93,8 @@ def test_a_database_without_the_column_answers_as_before(client):
             finally:
                 with engine.begin() as conn:
                     conn.execute(
-                        text("ALTER TABLE opencivicdata_relatedbill ADD COLUMN ddp_relation_label varchar(100)")
+                        text(
+                            "ALTER TABLE opencivicdata_relatedbill ADD COLUMN ddp_relation_label varchar(100)"
+                        )
                     )
                 forget_check()
