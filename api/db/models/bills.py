@@ -2,6 +2,7 @@ from functools import lru_cache
 from sqlalchemy import Column, String, ForeignKey, DateTime, Integer, Boolean, Text
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY, TSVECTOR
+from sqlalchemy import inspect
 from sqlalchemy.orm import deferred, relationship
 from .. import Base
 from .common import PrimaryUUID, LinkBase, RelatedEntityBase
@@ -133,6 +134,18 @@ class RelatedBill(PrimaryUUID, Base):
     identifier = Column(String)
     legislative_session = Column(String)  # not a FK, it can be unknown
     relation_type = Column(String)
+    # OPEN-641: the legislature's own word for the link (OPEN-640's column, core migration data.0052). Deferred, so
+    # no ordinary query selects it: a database without the column yet answers as before. BillPagination loads it
+    # only when relation_label_column_present() says the column is there.
+    ddp_relation_label = deferred(Column(String))
+
+    @property
+    def label(self):
+        """The legislature's word, or None: never read lazily (that would query a column that may not exist), and
+        an empty string is no word."""
+        if "ddp_relation_label" in inspect(self).unloaded:
+            return None
+        return self.ddp_relation_label or None
 
 
 class BillSponsorship(RelatedEntityBase, BillRelatedBase, Base):

@@ -228,6 +228,12 @@ class RelatedBill(BaseModel):
     identifier: str = Field(..., example="HB 123")
     legislative_session: str = Field(..., example="2022S1")
     relation_type: str = Field(..., example="companion")
+    # OPEN-641: the legislature's own word for the link ("Identical bill", "Similar", "Compare"), null when none was
+    # stored; and the linked bill as resolved in the database, null when it was not found.
+    label: Optional[str] = Field(None, example="Identical bill")
+    related_bill_id: Optional[str] = Field(
+        None, example="ocd-bill/12345678-0000-1111-2222-333333ffffff"
+    )
 
     class Config:
         orm_mode = True
