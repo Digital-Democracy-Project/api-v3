@@ -1,8 +1,8 @@
-"""OPEN-870: `exclude_introduced_drafts` asks for the OPEN-861 rule alone (an introduced draft's own record is left out),
-without the bill-type rule of `bill_types_only`, on /bills, /ddp/search, /suggest, /hydrate, /ddp/sitemap/bills and
-/ddp/embedding/ledger. Ramon (2026-11-24): LegBot and the sitemap may cover drafts while they are drafts and drop one once
-a bill replaces it. The AK world of test_open861 covers the routes that read bills one by one; the Ohio fixtures cover the
-sitemap and the ledger.
+"""OPEN-870: `exclude_introduced_drafts` asks for the OPEN-861 rule alone (an introduced draft's own record is left
+out), without the bill-type rule of `bill_types_only`, on /bills, /ddp/search, /suggest, /hydrate,
+/ddp/sitemap/bills and /ddp/embedding/ledger. Ramon (2026-11-24): LegBot and the sitemap may cover drafts while
+they are drafts and drop one once a bill replaces it. The AK world of test_open861 covers the routes that read
+bills one by one; the Ohio fixtures cover the sitemap and the ledger.
 """
 import uuid
 
@@ -57,7 +57,7 @@ def test_the_bill_list_is_unchanged_when_the_switch_is_off(with_paper, client):
     assert {DRAFT, INTRODUCED, WAITING, PAPER} <= ids
 
 
-def test_search_suggest_and_hydrate_take_the_switch(searchable):
+def test_search_suggest_and_hydrate_take_the_switch(searchable):  # noqa: F811
     text_hits = _search(
         searchable, q="pathology direct billing", exclude_introduced_drafts="true"
     )[1]
@@ -80,7 +80,9 @@ def test_search_suggest_and_hydrate_take_the_switch(searchable):
     assert {h["id"] for h in r.json()["results"]} == {INTRODUCED}
 
 
-def test_with_no_links_the_switch_hides_nothing(drafts, client, monkeypatch):
+def test_with_no_links_the_switch_hides_nothing(
+    drafts, client, monkeypatch  # noqa: F811
+):
     monkeypatch.setattr(bill_types, "INTRODUCED_DRAFT_LINKS", [])
     ids, _ = _bill_list(client, exclude_introduced_drafts="true")
     assert DRAFT in ids
