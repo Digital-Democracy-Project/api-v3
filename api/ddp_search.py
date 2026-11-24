@@ -14,7 +14,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from . import search_projection
-from .bill_types import BILL_TYPES, SQL_IS_BILL_TYPE
+from . import bill_types
+from .bill_types import BILL_TYPES, SQL_IS_BILL_TYPE, SQL_IS_NOT_INTRODUCED_DRAFT
 from .auth import apikey_auth
 from .db import engine, get_db
 
@@ -54,14 +55,20 @@ _SESSION_FILTER = (
 # OPEN-519: with `bill_types_only`, a bill whose label is not a bill type (a Massachusetts report, order, communication
 # or study request) is left out. The label is read from opencivicdata_bill when the query runs, never copied into
 # ddp_bill_search: the OPEN-517 relabel does not move updated_at, so a copied label would never be refreshed.
+# OPEN-861: nor is an introduced draft's own record (api/bill_types.py), read live the same way.
 _BILL_TYPE_FILTER = (
     "AND (NOT CAST(:bill_types_only AS boolean) OR EXISTS ("
-    f"SELECT 1 FROM opencivicdata_bill b WHERE b.id = s.bill_id AND {SQL_IS_BILL_TYPE}))"
+    f"SELECT 1 FROM opencivicdata_bill b WHERE b.id = s.bill_id AND {SQL_IS_BILL_TYPE}"
+    f" AND {SQL_IS_NOT_INTRODUCED_DRAFT}))"
 )
 
 
 def _bill_type_params(bill_types_only: bool) -> dict:
-    return {"bill_types_only": bill_types_only, "bill_types": list(BILL_TYPES)}
+    return {
+        "bill_types_only": bill_types_only,
+        "bill_types": list(BILL_TYPES),
+        "draft_links": list(bill_types.INTRODUCED_DRAFT_LINKS),
+    }
 
 
 # Snippet = first abstract, 240 chars: OpenStates' own public description of the bill. Selected
