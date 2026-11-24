@@ -27,7 +27,7 @@ from .bill_version_flag import (
     flag_column_present,
     relation_label_column_present,
 )
-from .bill_types import is_bill_type_clause
+from .bill_types import is_bill_type_clause, is_not_introduced_draft_clause
 from .document_choice import preferred_document
 
 # DDP: stable, human-readable names for version_ordering's numeric stages, exposed as
@@ -375,7 +375,8 @@ async def bills_search(
         description=(
             "OPEN-519: only items whose classification is a bill type (api/bill_types.py), so papers "
             "filed under bill numbers that are not bills (reports, orders, communications, study "
-            "requests) are neither listed nor counted. Off by default."
+            "requests) are neither listed nor counted. OPEN-861: nor is a bill draft's own record once "
+            "the draft is introduced as a bill. Off by default."
         ),
     ),
     subject: Optional[List[str]] = Query(
@@ -492,6 +493,7 @@ async def bills_search(
         query = query.filter(models.Bill.classification.any(classification))
     if bill_types_only:
         query = query.filter(is_bill_type_clause(models.Bill.classification))
+        query = query.filter(is_not_introduced_draft_clause(models))
     if subject:
         query = query.filter(models.Bill.subject.contains(subject))
     if sponsor:

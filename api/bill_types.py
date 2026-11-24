@@ -12,11 +12,19 @@ Rule: an item is a bill type when any of its labels is in BILL_TYPES, or it has 
 scraper that leaves the label blank never hides a bill). NOT_BILL_TYPES is the labels deliberately left out. A label
 on neither list is still left out by the rule, so `python -m api.bill_types check` (and its test) fails when the data
 holds one, and someone decides which list it belongs on before it is hidden by accident.
+
+OPEN-861 (Ramon, 2026-11-24: hide the old draft record, store it, never delete it): `bill_types_only` also leaves out a
+bill draft's own record once the draft is introduced as a bill. Montana's pre-filing scrape stores each draft
+("LC nnnn") as a bill; the introduced bill links to it, and the importer never deletes the draft's record. The link
+comes from the data: a state's core rules name the relation type its introduced bills use for their draft
+(`INTRODUCED_DRAFT_RELATION` in openstates-core `ddp_states/<state>.py`), and a record that a bill of its own
+jurisdiction links to with that type is left out. No state is named here; a core without the value hides nothing.
 """
 import sys
 from typing import List
 
-from sqlalchemy import func, or_, text
+from openstates.ddp_states import state_values
+from sqlalchemy import exists, func, or_, text
 
 BILL_TYPES = (
     "bill",
@@ -59,6 +67,40 @@ def is_bill_type_clause(classification_column):
     return or_(
         classification_column.overlap(list(BILL_TYPES)),
         func.coalesce(func.cardinality(classification_column), 0) == 0,
+    )
+
+
+def introduced_draft_links() -> List[str]:
+    """OPEN-861: "<jurisdiction id>#<relation type>" for each state whose core rules name the relation by which an
+    introduced bill links to its draft's record."""
+    return [
+        f"ocd-jurisdiction/country:us/state:{state}/government#{relation}"
+        for state, relation in sorted(state_values("INTRODUCED_DRAFT_RELATION").items())
+    ]
+
+
+INTRODUCED_DRAFT_LINKS = introduced_draft_links()
+
+# For raw SQL over opencivicdata_bill aliased `b`: not a draft's record that a bill has since been introduced from. The
+# link is resolved by the importer only within the bill's own jurisdiction and session. Bind :draft_links to
+# INTRODUCED_DRAFT_LINKS.
+SQL_IS_NOT_INTRODUCED_DRAFT = (
+    "NOT EXISTS (SELECT 1 FROM opencivicdata_relatedbill r"
+    " JOIN opencivicdata_legislativesession ls ON ls.id = b.legislative_session_id"
+    " WHERE r.related_bill_id = b.id"
+    " AND ls.jurisdiction_id || '#' || r.relation_type = ANY(CAST(:draft_links AS text[])))"
+)
+
+
+def is_not_introduced_draft_clause(models):
+    """The OPEN-861 rule for a SQLAlchemy query on `models.Bill` joined to `models.LegislativeSession`."""
+    return ~exists().where(
+        models.RelatedBill.related_bill_id == models.Bill.id,
+        (
+            models.LegislativeSession.jurisdiction_id
+            + "#"
+            + models.RelatedBill.relation_type
+        ).in_(INTRODUCED_DRAFT_LINKS),
     )
 
 
