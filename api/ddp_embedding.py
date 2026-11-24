@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from . import bills as bills_module
 from .auth import apikey_auth
+from .bill_types import EXCLUDE_INTRODUCED_DRAFTS_HELP, is_not_introduced_draft_clause
 from .db import get_db, models
 from .ddp_search import _jurisdiction_ids
 
@@ -76,6 +77,9 @@ def ledger(
     limit: int = Query(
         DEFAULT_LIMIT, ge=1, le=MAX_LIMIT, description="Bills per page."
     ),
+    exclude_introduced_drafts: bool = Query(
+        False, description=EXCLUDE_INTRODUCED_DRAFTS_HELP
+    ),
     auth: str = Depends(apikey_auth),
     db: Session = Depends(get_db),
 ):
@@ -96,6 +100,8 @@ def ledger(
         )
         .order_by(models.Bill.id)
     )
+    if exclude_introduced_drafts:
+        query = query.filter(is_not_introduced_draft_clause(models))
     if after:
         query = query.filter(models.Bill.id > after)
     bills = query.limit(

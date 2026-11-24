@@ -81,6 +81,14 @@ def introduced_draft_links() -> List[str]:
 
 INTRODUCED_DRAFT_LINKS = introduced_draft_links()
 
+# OPEN-870 (Ramon, 2026-11-24: LegBot and the sitemap may cover drafts while they are drafts and drop one once a bill
+# replaces it): `exclude_introduced_drafts` asks for the OPEN-861 rule alone, without the label rule, on every route
+# that takes it. `bill_types_only` implies it.
+EXCLUDE_INTRODUCED_DRAFTS_HELP = (
+    "OPEN-870: leave out a bill draft's own record once the draft is introduced as a bill (the OPEN-861 rule alone, "
+    "without the bill-type rule of `bill_types_only`, which implies it). Off by default."
+)
+
 # For raw SQL over opencivicdata_bill aliased `b`: not a draft's record that a bill has since been introduced from. The
 # link is resolved by the importer only within the bill's own jurisdiction and session. Bind :draft_links to
 # INTRODUCED_DRAFT_LINKS.

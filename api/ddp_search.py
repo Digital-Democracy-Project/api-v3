@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 
 from . import search_projection
 from . import bill_types
-from .bill_types import BILL_TYPES, SQL_IS_BILL_TYPE, SQL_IS_NOT_INTRODUCED_DRAFT
+from .bill_types import (
+    BILL_TYPES,
+    EXCLUDE_INTRODUCED_DRAFTS_HELP,
+    SQL_IS_BILL_TYPE,
+    SQL_IS_NOT_INTRODUCED_DRAFT,
+)
 from .auth import apikey_auth
 from .db import engine, get_db
 
@@ -58,14 +63,19 @@ _SESSION_FILTER = (
 # OPEN-861: nor is an introduced draft's own record (api/bill_types.py), read live the same way.
 _BILL_TYPE_FILTER = (
     "AND (NOT CAST(:bill_types_only AS boolean) OR EXISTS ("
-    f"SELECT 1 FROM opencivicdata_bill b WHERE b.id = s.bill_id AND {SQL_IS_BILL_TYPE}"
-    f" AND {SQL_IS_NOT_INTRODUCED_DRAFT}))"
+    f"SELECT 1 FROM opencivicdata_bill b WHERE b.id = s.bill_id AND {SQL_IS_BILL_TYPE}))"
+    " AND (NOT CAST(:exclude_introduced_drafts AS boolean) OR EXISTS ("
+    f"SELECT 1 FROM opencivicdata_bill b WHERE b.id = s.bill_id AND {SQL_IS_NOT_INTRODUCED_DRAFT}))"
 )
 
 
-def _bill_type_params(bill_types_only: bool) -> dict:
+def _bill_type_params(
+    bill_types_only: bool, exclude_introduced_drafts: bool = False
+) -> dict:
     return {
         "bill_types_only": bill_types_only,
+        # OPEN-870: `bill_types_only` implies the drafts rule
+        "exclude_introduced_drafts": exclude_introduced_drafts or bill_types_only,
         "bill_types": list(BILL_TYPES),
         "draft_links": list(bill_types.INTRODUCED_DRAFT_LINKS),
     }
@@ -560,6 +570,9 @@ def search(
         False,
         description="OPEN-519: bills only of a bill type (api/bill_types.py); off by default.",
     ),
+    exclude_introduced_drafts: bool = Query(
+        False, description=EXCLUDE_INTRODUCED_DRAFTS_HELP
+    ),
     db: Session = Depends(get_db),
     auth: str = Depends(apikey_auth),
 ):
@@ -577,7 +590,7 @@ def search(
         "limit": limit,
         "session": session,
         "like": _like(q),
-        **_bill_type_params(bill_types_only),
+        **_bill_type_params(bill_types_only, exclude_introduced_drafts),
     }
     _use_similarity_threshold(db)
 
@@ -617,6 +630,9 @@ def suggest(
         False,
         description="OPEN-519: bills only of a bill type (api/bill_types.py); off by default.",
     ),
+    exclude_introduced_drafts: bool = Query(
+        False, description=EXCLUDE_INTRODUCED_DRAFTS_HELP
+    ),
     db: Session = Depends(get_db),
     auth: str = Depends(apikey_auth),
 ):
@@ -631,7 +647,7 @@ def suggest(
         "limit": limit,
         "session": None,
         "like": _like(q),
-        **_bill_type_params(bill_types_only),
+        **_bill_type_params(bill_types_only, exclude_introduced_drafts),
     }
     _use_similarity_threshold(db)
 
@@ -668,6 +684,9 @@ def hydrate(
         False,
         description="OPEN-519: bills only of a bill type (api/bill_types.py); off by default.",
     ),
+    exclude_introduced_drafts: bool = Query(
+        False, description=EXCLUDE_INTRODUCED_DRAFTS_HELP
+    ),
     db: Session = Depends(get_db),
     auth: str = Depends(apikey_auth),
 ):
@@ -683,7 +702,7 @@ def hydrate(
             "ids": bill_ids,
             "jids": jids,
             "session": session,
-            **_bill_type_params(bill_types_only),
+            **_bill_type_params(bill_types_only, exclude_introduced_drafts),
         }
         # OPEN-519: each bill's label, so a caller can see what an item is
         hits += [
