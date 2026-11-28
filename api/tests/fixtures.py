@@ -501,6 +501,7 @@ def ohio():
     v1 = VoteEvent(
         id="ocd-vote/1",
         bill=hb1,
+        dedupe_key="oh-2021-hb1-house-floor-vote",  # OPEN-957; ocd-vote/2 keeps none
         identifier="Vote on HB1",
         motion_text="Floor Vote",
         start_date="2021-01-01",
