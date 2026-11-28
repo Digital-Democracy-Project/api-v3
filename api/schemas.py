@@ -454,6 +454,9 @@ class VoteEvent(BaseModel):
     result: str = Field(..., example="pass")
     identifier: str = Field(..., example="HV #3312")
     extras: dict
+    # OPEN-957: the importer's key for this vote event (unique per jurisdiction).
+    # Left out of the answer where none was stored (these routes drop nulls).
+    dedupe_key: Optional[str] = Field(None, example="ky-2026-sb197-senate-passage-1")
 
     organization: Organization
     votes: List[PersonVote]

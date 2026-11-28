@@ -330,6 +330,7 @@ def test_bills_include_votes(client):
     assert b["votes"] == [
         {
             "id": "ocd-vote/1",
+            "dedupe_key": "oh-2021-hb1-house-floor-vote",
             "identifier": "Vote on HB1",
             "motion_text": "Floor Vote",
             "motion_classification": [],

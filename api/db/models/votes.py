@@ -18,6 +18,8 @@ class VoteEvent(Base):
     start_date = Column(String)
     result = Column(String)
     extras = Column(JSONB, default=dict)
+    # OPEN-957: openstates-core's VoteEvent.dedupe_key (nullable CharField(500)); mapped so the response can carry it.
+    dedupe_key = Column(String)
     # OPEN-377: mapped so /bills?vote_updated_since= can filter on it. The importer bumps a vote
     # event's own updated_at when the vote changes; it never touches Bill.updated_at for it.
     updated_at = Column(DateTime(timezone=True))
